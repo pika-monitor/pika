@@ -136,15 +136,34 @@ func setupApi(app *orz.App, components *AppComponents) error {
 	if cfg != nil && cfg.Server.IPExtractor != "" && cfg.Server.IPExtractor != "direct" {
 		headerName := cfg.Server.IPExtractor
 
-		// 解析 trust list，支持字符串 "0.0.0.0/0" 或数组格式
+		// 解析 trust list，支持 CIDR 格式 (10.0.0.0/8) 或普通 IP (127.0.0.1 自动补 /32 或 /128)
 		var trustCIDRs []*net.IPNet
 		for _, s := range cfg.Server.IPTrustList {
 			s = strings.TrimSpace(s)
-			if s != "" {
-				if _, cidr, err := net.ParseCIDR(s); err == nil {
-					trustCIDRs = append(trustCIDRs, cidr)
+			if s == "" {
+				continue
+			}
+			// 先尝试 CIDR 格式
+			_, cidr, err := net.ParseCIDR(s)
+			if err != nil {
+				// 尝试普通 IP，自动补 /32 (IPv4) 或 /128 (IPv6)
+				ip := net.ParseIP(s)
+				if ip == nil {
+					logger.Warn("invalid IP in trust list", zap.String("ip", s))
+					continue
+				}
+				// 根据 IP 类型补 CIDR 后缀
+				if ip.To4() != nil {
+					_, cidr, err = net.ParseCIDR(s + "/32")
+				} else {
+					_, cidr, err = net.ParseCIDR(s + "/128")
+				}
+				if err != nil {
+					logger.Warn("failed to parse IP as CIDR", zap.String("ip", s), zap.Error(err))
+					continue
 				}
 			}
+			trustCIDRs = append(trustCIDRs, cidr)
 		}
 
 		e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
