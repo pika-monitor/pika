@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -127,6 +128,58 @@ func setupApi(app *orz.App, components *AppComponents) error {
 			return err
 		},
 	}))
+
+	// 自定义 IP 提取器中间件（支持任意 header）
+	// 框架只支持 x-forwarded-for/x-real-ip/direct，其他配置会被 fallback 到 direct
+	// 这里统一处理：从配置的 header 取 IP，并验证 trust list 防止伪造
+	cfg := app.GetConfig()
+	if cfg != nil && cfg.Server.IPExtractor != "" && cfg.Server.IPExtractor != "direct" {
+		headerName := cfg.Server.IPExtractor
+
+		// 解析 trust list，支持字符串 "0.0.0.0/0" 或数组格式
+		var trustCIDRs []*net.IPNet
+		for _, s := range cfg.Server.IPTrustList {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				if _, cidr, err := net.ParseCIDR(s); err == nil {
+					trustCIDRs = append(trustCIDRs, cidr)
+				}
+			}
+		}
+
+		e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+			return func(c echo.Context) error {
+				// 验证请求来源是否在 trust list 中
+				if len(trustCIDRs) > 0 {
+					remoteIP, _, _ := net.SplitHostPort(c.Request().RemoteAddr)
+					if remoteIP == "" {
+						remoteIP = c.Request().RemoteAddr
+					}
+					trusted := false
+					for _, cidr := range trustCIDRs {
+						if cidr.Contains(net.ParseIP(remoteIP)) {
+							trusted = true
+							break
+						}
+					}
+					if !trusted {
+						return next(c) // 非可信来源，不信任 header
+					}
+				}
+
+				// 从 header 取 IP
+				ip := c.Request().Header.Get(headerName)
+				if ip != "" {
+					if idx := strings.IndexByte(ip, ','); idx > 0 {
+						ip = strings.TrimSpace(ip[:idx])
+					}
+					c.Request().RemoteAddr = ip
+				}
+				return next(c)
+			}
+		})
+		logger.Info("custom IP extractor configured", zap.String("header", headerName), zap.Int("trustedCIDRs", len(trustCIDRs)))
+	}
 
 	webDir := assets.WebDir()
 	if err := assets.RenderUIFilesInDir(webDir, components.PropertyService); err != nil {

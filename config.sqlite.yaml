@@ -11,7 +11,8 @@ log:
 server:
   addr: "0.0.0.0:8080"
   ip_extractor: "x-forwarded-for"
-  ip_trust_list: "0.0.0.0/0"
+  ip_trust_list:
+    - "0.0.0.0/0"
 
 App:
   JWT:
