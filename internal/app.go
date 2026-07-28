@@ -163,7 +163,7 @@ func setupApi(app *orz.App, components *AppComponents) error {
 		}
 
 		e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
-			return func(c echo.Context) error {
+			return func(c *echo.Context) error {
 				// 验证请求来源是否在 trust list 中
 				if len(trustCIDRs) > 0 {
 					remoteIP, _, _ := net.SplitHostPort(c.Request().RemoteAddr)
@@ -310,6 +310,10 @@ func setupApi(app *orz.App, components *AppComponents) error {
 		adminApi.DELETE("/agents/:id", components.AgentHandler.Delete)
 		adminApi.POST("/agents/cleanup-metrics", components.AgentHandler.CleanupOrphanedAgentMetrics) // 清理残留指标数据
 		adminApi.POST("/agents/:id/command", components.AgentHandler.SendCommand)
+		adminApi.POST("/agents/:id/commands", components.AgentHandler.CreateCommandTask)
+		adminApi.GET("/agents/:id/commands", components.AgentHandler.ListCommandTasks)
+		adminApi.GET("/agents/:id/commands/:commandId", components.AgentHandler.GetCommandTask)
+		adminApi.POST("/agents/:id/commands/:commandId/cancel", components.AgentHandler.CancelCommandTask)
 
 		// 流量管理（管理员访问）
 		adminApi.GET("/agents/:id/traffic", components.AgentHandler.GetTrafficStats)
@@ -382,6 +386,7 @@ func autoMigrate(database *gorm.DB) error {
 		&models.Agent{},         // 探针
 		&models.ApiKey{},        // ApiKey
 		&models.AuditResult{},   // 审计历史
+		&models.CommandTask{},   // 远程命令任务
 		&models.Property{},      // 系统属性
 		&models.AlertRecord{},   // 告警记录
 		&models.AlertState{},    // 告警状态

@@ -2,7 +2,7 @@ import {useEffect, useState} from 'react';
 import {useNavigate, useParams, useSearchParams} from 'react-router-dom';
 import type {TabsProps} from 'antd';
 import {Alert, Button, Card, Space, Spin, Tabs, Tag} from 'antd';
-import {Activity, ArrowLeft, FileWarning, Lock, Shield, TrendingUp} from 'lucide-react';
+import {Activity, ArrowLeft, FileWarning, Lock, Shield, Terminal, TrendingUp} from 'lucide-react';
 import {useQuery} from '@tanstack/react-query';
 import {getAgentForAdmin} from '@/api/agent.ts';
 import AgentBasicInfo from './AgentBasicInfo';
@@ -10,6 +10,7 @@ import AgentAudit from './AgentAudit';
 import TamperProtection from './TamperProtection';
 import SSHLoginMonitor from './SSHLoginMonitor';
 import TrafficStats from './TrafficStats';
+import AgentCommands from './AgentCommands';
 
 const AgentDetail = () => {
     const {id} = useParams<{ id: string }>();
@@ -80,6 +81,16 @@ const AgentDetail = () => {
                 </div>
             ),
             children: <TrafficStats agentId={id}/>,
+        },
+        {
+            key: 'commands',
+            label: (
+                <div className="flex items-center gap-2 text-sm">
+                    <Terminal size={16}/>
+                    <div>远程命令</div>
+                </div>
+            ),
+            children: <AgentCommands agentId={id} online={agent.status === 1}/>,
         },
         {
             key: 'audit',

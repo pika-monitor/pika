@@ -10,6 +10,7 @@ import (
 	"github.com/dushixiang/pika/internal/models"
 	"github.com/dushixiang/pika/internal/protocol"
 	"github.com/go-orz/orz"
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v5"
 	"go.uber.org/zap"
 )
@@ -28,6 +29,131 @@ func SortAgents(agents []models.Agent) {
 		// 权重相同时按名称排序
 		return strings.Compare(a.Name, b.Name)
 	})
+}
+
+type createCommandTaskRequest struct {
+	Command        string `json:"command"`
+	TimeoutSeconds int    `json:"timeoutSeconds"`
+}
+
+// CreateCommandTask creates a persisted background command and dispatches it to an online agent.
+func (h *AgentHandler) CreateCommandTask(c *echo.Context) error {
+	agentID := c.Param("id")
+	var req createCommandTaskRequest
+	if err := c.Bind(&req); err != nil {
+		return orz.NewError(400, "请求参数错误")
+	}
+	req.Command = strings.TrimSpace(req.Command)
+	if req.Command == "" {
+		return orz.NewError(400, "命令不能为空")
+	}
+	if len(req.Command) > 8192 {
+		return orz.NewError(400, "命令长度不能超过 8192 字节")
+	}
+	if req.TimeoutSeconds == 0 {
+		req.TimeoutSeconds = 60
+	}
+	if req.TimeoutSeconds < 1 || req.TimeoutSeconds > 3600 {
+		return orz.NewError(400, "超时时间必须在 1 到 3600 秒之间")
+	}
+	if _, exists := h.wsManager.GetClient(agentID); !exists {
+		return orz.NewError(400, "探针未连接")
+	}
+
+	now := time.Now().UnixMilli()
+	task := &models.CommandTask{
+		ID:             uuid.NewString(),
+		AgentID:        agentID,
+		Command:        req.Command,
+		Status:         "pending",
+		TimeoutSeconds: req.TimeoutSeconds,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	ctx := c.Request().Context()
+	if err := h.agentService.CreateCommandTask(ctx, task); err != nil {
+		return err
+	}
+
+	msgData, err := json.Marshal(protocol.OutboundMessage{
+		Type: protocol.MessageTypeCommand,
+		Data: protocol.CommandRequest{
+			ID:             task.ID,
+			Type:           "shell_exec",
+			Command:        task.Command,
+			TimeoutSeconds: task.TimeoutSeconds,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if err := h.wsManager.SendToClient(agentID, msgData); err != nil {
+		_ = h.agentService.AgentRepo.UpdateCommandTask(ctx, task.ID, map[string]interface{}{
+			"status":      "error",
+			"error":       "发送指令失败",
+			"finished_at": time.Now().UnixMilli(),
+		})
+		return orz.NewError(500, "发送指令失败")
+	}
+
+	h.logger.Info("shell command sent", zap.String("agentID", agentID), zap.String("commandID", task.ID))
+	return orz.Ok(c, task)
+}
+
+func (h *AgentHandler) ListCommandTasks(c *echo.Context) error {
+	tasks, err := h.agentService.ListCommandTasks(c.Request().Context(), c.Param("id"))
+	if err != nil {
+		return err
+	}
+	return orz.Ok(c, tasks)
+}
+
+func (h *AgentHandler) GetCommandTask(c *echo.Context) error {
+	task, err := h.agentService.GetCommandTask(c.Request().Context(), c.Param("id"), c.Param("commandId"))
+	if err != nil {
+		return err
+	}
+	return orz.Ok(c, task)
+}
+
+func (h *AgentHandler) CancelCommandTask(c *echo.Context) error {
+	agentID := c.Param("id")
+	commandID := c.Param("commandId")
+	ctx := c.Request().Context()
+	task, err := h.agentService.GetCommandTask(ctx, agentID, commandID)
+	if err != nil {
+		return err
+	}
+	if task.Status != "pending" && task.Status != "running" {
+		return orz.NewError(400, "该任务当前无法取消")
+	}
+	if _, exists := h.wsManager.GetClient(agentID); !exists {
+		return orz.NewError(400, "探针未连接")
+	}
+	msgData, err := json.Marshal(protocol.OutboundMessage{
+		Type: protocol.MessageTypeCommand,
+		Data: protocol.CommandRequest{ID: commandID, Type: "shell_cancel"},
+	})
+	if err != nil {
+		return err
+	}
+	transitioned, err := h.agentService.AgentRepo.TransitionCommandTaskStatus(
+		ctx, agentID, commandID, []string{"pending", "running"}, "cancelling",
+	)
+	if err != nil {
+		return err
+	}
+	if !transitioned {
+		return orz.NewError(400, "该任务当前无法取消")
+	}
+	if err := h.wsManager.SendToClient(agentID, msgData); err != nil {
+		_, _ = h.agentService.AgentRepo.TransitionCommandTaskStatus(
+			ctx, agentID, commandID, []string{"cancelling"}, task.Status,
+		)
+		return orz.NewError(500, "发送取消指令失败")
+	}
+	task.Status = "cancelling"
+	return orz.Ok(c, task)
 }
 
 // Paging 探针分页查询（返回完整列表，前端实现过滤）
