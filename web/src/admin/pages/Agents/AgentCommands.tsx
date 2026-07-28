@@ -1,6 +1,6 @@
 import {useEffect, useState} from 'react';
-import {Alert, App, Button, Card, Empty, Input, InputNumber, List, Space, Tag, Typography} from 'antd';
-import {Ban, Play, RefreshCw} from 'lucide-react';
+import {Alert, App, Button, Card, Empty, Input, InputNumber, List, Space, Tag, Tooltip, Typography} from 'antd';
+import {Ban, Clock3, Play, RefreshCw, TerminalSquare} from 'lucide-react';
 import {useQuery} from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import {
@@ -28,6 +28,13 @@ const statusMeta: Record<CommandTask['status'], {label: string; color: string}> 
     success: {label: '成功', color: 'success'},
     error: {label: '失败', color: 'error'},
     cancelled: {label: '已取消', color: 'default'},
+};
+
+const formatTaskDuration = (task: CommandTask) => {
+    if (!task.startedAt) return null;
+    const end = task.finishedAt || Date.now();
+    const seconds = Math.max(0, end - task.startedAt) / 1000;
+    return seconds < 10 ? `${seconds.toFixed(1)} 秒` : `${Math.round(seconds)} 秒`;
 };
 
 const AgentCommands = ({agentId, online}: AgentCommandsProps) => {
@@ -138,30 +145,71 @@ const AgentCommands = ({agentId, online}: AgentCommandsProps) => {
                 </Space>
             </Card>
 
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
-                <Card title="最近任务" styles={{body: {padding: 0}}}>
+            <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[380px_minmax(0,1fr)]">
+                <Card
+                    title={(
+                        <div className="flex items-center gap-2">
+                            <TerminalSquare size={17}/>
+                            <span>最近任务</span>
+                            <span className="text-xs font-normal text-gray-400">{tasks.length}</span>
+                        </div>
+                    )}
+                    styles={{body: {padding: 0}}}
+                >
                     {tasks.length === 0 ? (
-                        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无命令任务"/>
+                        <div className="py-8">
+                            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无命令任务"/>
+                        </div>
                     ) : (
-                        <List
-                            dataSource={tasks}
-                            renderItem={task => (
-                                <List.Item
-                                    className={`cursor-pointer px-4 transition-colors ${selectedId === task.id ? 'bg-blue-50 dark:bg-cyan-950/30' : ''}`}
-                                    onClick={() => setSelectedId(task.id)}
-                                >
-                                    <div className="min-w-0 w-full">
-                                        <div className="flex items-center justify-between gap-2">
-                                            <Text ellipsis className="font-mono">{task.command}</Text>
-                                            <Tag color={statusMeta[task.status].color}>{statusMeta[task.status].label}</Tag>
-                                        </div>
-                                        <Text type="secondary" className="text-xs">
-                                            {dayjs(task.createdAt).format('YYYY-MM-DD HH:mm:ss')}
-                                        </Text>
-                                    </div>
-                                </List.Item>
-                            )}
-                        />
+                        <div className="max-h-[600px] overflow-y-auto overscroll-contain">
+                            <List
+                                dataSource={tasks}
+                                renderItem={task => {
+                                    const selected = selectedId === task.id;
+                                    const duration = formatTaskDuration(task);
+                                    return (
+                                        <List.Item
+                                            role="button"
+                                            tabIndex={0}
+                                            aria-current={selected ? 'true' : undefined}
+                                            className={`cursor-pointer !border-l-2 !px-4 !py-3 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 ${selected ? '!border-l-blue-500 bg-blue-50/80 dark:bg-cyan-950/30' : '!border-l-transparent hover:bg-gray-50 dark:hover:bg-white/5'}`}
+                                            onClick={() => setSelectedId(task.id)}
+                                            onKeyDown={event => {
+                                                if (event.key === 'Enter' || event.key === ' ') {
+                                                    event.preventDefault();
+                                                    setSelectedId(task.id);
+                                                }
+                                            }}
+                                        >
+                                            <div className="w-full min-w-0">
+                                                <div className="flex min-w-0 items-center gap-3">
+                                                    <Tooltip
+                                                        title={<span className="font-mono break-all">{task.command}</span>}
+                                                        placement="topLeft"
+                                                        mouseEnterDelay={0.5}
+                                                    >
+                                                        <div className="min-w-0 flex-1 truncate font-mono text-sm font-medium leading-6">
+                                                            <span className="mr-1 text-gray-400">$</span>{task.command}
+                                                        </div>
+                                                    </Tooltip>
+                                                    <Tag className="!m-0 shrink-0" color={statusMeta[task.status].color}>
+                                                        {statusMeta[task.status].label}
+                                                    </Tag>
+                                                </div>
+                                                <div className="mt-1.5 flex min-w-0 items-center gap-3 text-xs text-gray-400">
+                                                    <span className="flex shrink-0 items-center gap-1">
+                                                        <Clock3 size={12}/>
+                                                        {dayjs(task.createdAt).format('MM-DD HH:mm:ss')}
+                                                    </span>
+                                                    {duration && <span className="truncate">耗时 {duration}</span>}
+                                                    {task.exitCode !== undefined && <span className="ml-auto shrink-0">退出码 {task.exitCode}</span>}
+                                                </div>
+                                            </div>
+                                        </List.Item>
+                                    );
+                                }}
+                            />
+                        </div>
                     )}
                 </Card>
 
