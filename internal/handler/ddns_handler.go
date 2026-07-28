@@ -7,7 +7,7 @@ import (
 	"github.com/dushixiang/pika/internal/service"
 	"github.com/go-orz/orz"
 	"github.com/google/uuid"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"go.uber.org/zap"
 )
 
@@ -53,7 +53,7 @@ type UpdateConfigRequest struct {
 }
 
 // Paging DDNS 配置分页查询
-func (h *DDNSHandler) Paging(c echo.Context) error {
+func (h *DDNSHandler) Paging(c *echo.Context) error {
 	agentID := c.QueryParam("agentId")
 	name := c.QueryParam("name")
 
@@ -80,7 +80,7 @@ func (h *DDNSHandler) Paging(c echo.Context) error {
 }
 
 // Create 创建 DDNS 配置
-func (h *DDNSHandler) Create(c echo.Context) error {
+func (h *DDNSHandler) Create(c *echo.Context) error {
 	var req CreateConfigRequest
 	if err := c.Bind(&req); err != nil {
 		return err
@@ -144,7 +144,7 @@ func (h *DDNSHandler) Create(c echo.Context) error {
 }
 
 // Get 获取 DDNS 配置详情
-func (h *DDNSHandler) Get(c echo.Context) error {
+func (h *DDNSHandler) Get(c *echo.Context) error {
 	id := c.Param("id")
 	ctx := c.Request().Context()
 
@@ -158,7 +158,7 @@ func (h *DDNSHandler) Get(c echo.Context) error {
 }
 
 // Update 更新 DDNS 配置
-func (h *DDNSHandler) Update(c echo.Context) error {
+func (h *DDNSHandler) Update(c *echo.Context) error {
 	id := c.Param("id")
 
 	var req UpdateConfigRequest
@@ -200,7 +200,7 @@ func (h *DDNSHandler) Update(c echo.Context) error {
 }
 
 // Delete 删除 DDNS 配置
-func (h *DDNSHandler) Delete(c echo.Context) error {
+func (h *DDNSHandler) Delete(c *echo.Context) error {
 	id := c.Param("id")
 	ctx := c.Request().Context()
 
@@ -213,7 +213,7 @@ func (h *DDNSHandler) Delete(c echo.Context) error {
 }
 
 // Enable 启用 DDNS 配置
-func (h *DDNSHandler) Enable(c echo.Context) error {
+func (h *DDNSHandler) Enable(c *echo.Context) error {
 	id := c.Param("id")
 	ctx := c.Request().Context()
 
@@ -226,7 +226,7 @@ func (h *DDNSHandler) Enable(c echo.Context) error {
 }
 
 // Disable 禁用 DDNS 配置
-func (h *DDNSHandler) Disable(c echo.Context) error {
+func (h *DDNSHandler) Disable(c *echo.Context) error {
 	id := c.Param("id")
 	ctx := c.Request().Context()
 
@@ -239,7 +239,7 @@ func (h *DDNSHandler) Disable(c echo.Context) error {
 }
 
 // GetRecords 获取 DDNS 更新记录
-func (h *DDNSHandler) GetRecords(c echo.Context) error {
+func (h *DDNSHandler) GetRecords(c *echo.Context) error {
 	id := c.Param("id")
 	ctx := c.Request().Context()
 
@@ -257,7 +257,7 @@ func (h *DDNSHandler) GetRecords(c echo.Context) error {
 }
 
 // TriggerUpdate 手动触发 DDNS 更新
-func (h *DDNSHandler) TriggerUpdate(c echo.Context) error {
+func (h *DDNSHandler) TriggerUpdate(c *echo.Context) error {
 	id := c.Param("id")
 	ctx := c.Request().Context()
 

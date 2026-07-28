@@ -123,8 +123,12 @@ func DefaultConfig() *Config {
 
 // GetDefaultConfigPath 获取默认配置文件路径
 func GetDefaultConfigPath() string {
-	var homeDir = utils.GetSafeHomeDir()
-	return filepath.Join(homeDir, ".pika", "agent.yaml")
+	return filepath.Join(GetDataDir(), "agent.yaml")
+}
+
+// GetDataDir 获取 Agent 数据目录
+func GetDataDir() string {
+	return filepath.Join(utils.GetSafeHomeDir(), ".pika")
 }
 
 // Load 加载配置文件

@@ -2,17 +2,18 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
 
 	"github.com/dushixiang/pika/pkg/agent"
 	"github.com/dushixiang/pika/pkg/agent/config"
-	"github.com/dushixiang/pika/pkg/agent/id"
 	"github.com/dushixiang/pika/pkg/agent/sshmonitor"
 	"github.com/dushixiang/pika/pkg/agent/sysutil"
 	"github.com/dushixiang/pika/pkg/agent/updater"
@@ -37,6 +38,10 @@ func configureICMP() {
 
 // startAgent 启动 Agent 和自动更新（抽取通用逻辑）
 func startAgent(ctx context.Context, cfg *config.Config) *Agent {
+	if err := cleanupLegacyMetricsBuffer(); err != nil {
+		slog.Warn("failed to clean legacy metrics buffer", "error", err)
+	}
+
 	// 创建 Agent 实例
 	a := New(cfg)
 
@@ -147,7 +152,7 @@ func NewServiceManager(cfg *config.Config) (*ServiceManager, error) {
 	// 获取可执行文件路径
 	execPath, err := os.Executable()
 	if err != nil {
-		return nil, fmt.Errorf("获取可执行文件路径失败: %w", err)
+		return nil, fmt.Errorf("get executable path failed: %w", err)
 	}
 
 	var options = service.KeyValue{
@@ -193,7 +198,7 @@ func NewServiceManager(cfg *config.Config) (*ServiceManager, error) {
 	// 创建服务
 	s, err := service.New(prg, svcConfig)
 	if err != nil {
-		return nil, fmt.Errorf("创建服务失败: %w", err)
+		return nil, fmt.Errorf("create service failed: %w", err)
 	}
 
 	return &ServiceManager{
@@ -323,13 +328,13 @@ func UninstallAgent(cfgPath string) error {
 	// 加载配置
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
-		return fmt.Errorf("加载配置失败: %w", err)
+		return fmt.Errorf("load config failed: %w", err)
 	}
 
 	// 创建服务管理器
 	mgr, err := NewServiceManager(cfg)
 	if err != nil {
-		return fmt.Errorf("创建服务管理器失败: %w", err)
+		return fmt.Errorf("create service manager failed: %w", err)
 	}
 
 	// 检查服务状态，如果在运行则停止
@@ -338,30 +343,52 @@ func UninstallAgent(cfgPath string) error {
 		slog.Warn("获取服务状态失败", "error", err)
 	} else if status != "已停止 (Stopped)" {
 		if err := mgr.Stop(); err != nil {
-			return fmt.Errorf("停止服务失败: %w", err)
+			return fmt.Errorf("stop service failed: %w", err)
 		}
 	}
 
 	// 卸载服务
 	if err := mgr.Uninstall(); err != nil {
-		return fmt.Errorf("卸载服务失败: %w", err)
+		return fmt.Errorf("uninstall service failed: %w", err)
 	}
 
 	// 清理 SSH 监控配置
 	monitor := sshmonitor.NewMonitor()
-	if err := monitor.Stop(); err != nil {
-		slog.Warn("清理SSH监控配置失败", "error", err)
+	return cleanupAgentArtifacts(cfgPath, monitor.Uninstall)
+}
+
+func cleanupAgentArtifacts(cfgPath string, uninstallSSHMonitor func() error) error {
+	var cleanupErr error
+
+	if err := uninstallSSHMonitor(); err != nil {
+		cleanupErr = errors.Join(cleanupErr, fmt.Errorf("uninstall SSH monitor failed: %w", err))
 	}
 
-	// 删除配置文件
-	if err := os.Remove(cfgPath); err != nil {
-		slog.Warn("删除配置文件失败", "error", err)
+	// SSH 清理失败不应阻止配置、ID、日志和历史缓存的删除。
+	if err := removeAgentData(cfgPath); err != nil {
+		cleanupErr = errors.Join(cleanupErr, fmt.Errorf("remove agent data failed: %w", err))
 	}
 
-	// 删除探针 ID 文件
-	idPath := id.GetIDFilePath()
-	if err := os.Remove(idPath); err != nil {
-		slog.Warn("删除探针 ID 文件失败", "error", err)
+	return cleanupErr
+}
+
+func removeAgentData(cfgPath string) error {
+	if cfgPath == "" {
+		cfgPath = config.GetDefaultConfigPath()
+	}
+
+	dataDir := filepath.Clean(config.GetDataDir())
+	cleanCfgPath := filepath.Clean(cfgPath)
+
+	// 自定义配置可能位于数据目录之外，只删除配置文件本身。
+	if cleanCfgPath != dataDir && !strings.HasPrefix(cleanCfgPath, dataDir+string(os.PathSeparator)) {
+		if err := os.Remove(cleanCfgPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove config file %s: %w", cleanCfgPath, err)
+		}
+	}
+
+	if err := os.RemoveAll(dataDir); err != nil {
+		return fmt.Errorf("remove data directory %s: %w", dataDir, err)
 	}
 
 	return nil

@@ -4,7 +4,7 @@ import (
 	"github.com/dushixiang/pika/internal/models"
 	"github.com/dushixiang/pika/internal/service"
 	"github.com/go-orz/orz"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"go.uber.org/zap"
 )
 
@@ -24,7 +24,7 @@ func NewSSHLoginHandler(logger *zap.Logger, service *service.SSHLoginService) *S
 
 // GetConfig 获取SSH登录监控配置
 // GET /api/agents/:id/ssh-login/config
-func (h *SSHLoginHandler) GetConfig(c echo.Context) error {
+func (h *SSHLoginHandler) GetConfig(c *echo.Context) error {
 	agentID := c.Param("id")
 	if agentID == "" {
 		return orz.NewError(400, "探针ID不能为空")
@@ -41,7 +41,7 @@ func (h *SSHLoginHandler) GetConfig(c echo.Context) error {
 
 // UpdateConfig 更新SSH登录监控配置
 // POST /api/agents/:id/ssh-login/config
-func (h *SSHLoginHandler) UpdateConfig(c echo.Context) error {
+func (h *SSHLoginHandler) UpdateConfig(c *echo.Context) error {
 	agentID := c.Param("id")
 
 	var req models.SSHLoginConfigData
@@ -60,7 +60,7 @@ func (h *SSHLoginHandler) UpdateConfig(c echo.Context) error {
 
 // ListEvents 查询SSH登录事件
 // GET /api/agents/:id/ssh-login/events
-func (h *SSHLoginHandler) ListEvents(c echo.Context) error {
+func (h *SSHLoginHandler) ListEvents(c *echo.Context) error {
 	agentID := c.Param("id")
 
 	// 获取分页参数
@@ -83,7 +83,7 @@ func (h *SSHLoginHandler) ListEvents(c echo.Context) error {
 
 // GetEvent 获取单个SSH登录事件
 // GET /api/ssh-login/events/:id
-func (h *SSHLoginHandler) GetEvent(c echo.Context) error {
+func (h *SSHLoginHandler) GetEvent(c *echo.Context) error {
 	eventID := c.Param("id")
 	if eventID == "" {
 		return orz.NewError(400, "事件ID不能为空")
@@ -105,7 +105,7 @@ func (h *SSHLoginHandler) GetEvent(c echo.Context) error {
 
 // DeleteEvents 删除探针的所有SSH登录事件
 // DELETE /api/agents/:id/ssh-login/events
-func (h *SSHLoginHandler) DeleteEvents(c echo.Context) error {
+func (h *SSHLoginHandler) DeleteEvents(c *echo.Context) error {
 	agentID := c.Param("id")
 
 	ctx := c.Request().Context()

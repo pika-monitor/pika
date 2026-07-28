@@ -4,7 +4,7 @@ import (
 	"github.com/dushixiang/pika/internal/models"
 	"github.com/dushixiang/pika/internal/service"
 	"github.com/go-orz/orz"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"go.uber.org/zap"
 )
 
@@ -22,7 +22,7 @@ func NewTamperHandler(logger *zap.Logger, tamperService *service.TamperService) 
 
 // UpdateConfig 更新探针的防篡改配置
 // POST /api/agents/:id/tamper/config
-func (h *TamperHandler) UpdateConfig(c echo.Context) error {
+func (h *TamperHandler) UpdateConfig(c *echo.Context) error {
 	agentID := c.Param("id")
 
 	var req models.TamperProtectConfigData
@@ -42,7 +42,7 @@ func (h *TamperHandler) UpdateConfig(c echo.Context) error {
 
 // GetConfig 获取探针的防篡改配置
 // GET /api/agents/:id/tamper/config
-func (h *TamperHandler) GetConfig(c echo.Context) error {
+func (h *TamperHandler) GetConfig(c *echo.Context) error {
 	agentID := c.Param("id")
 
 	config, err := h.tamperService.GetConfigByAgentID(c.Request().Context(), agentID)
@@ -56,7 +56,7 @@ func (h *TamperHandler) GetConfig(c echo.Context) error {
 
 // ListEvents 获取探针的防篡改事件
 // GET /api/agents/:id/tamper/events
-func (h *TamperHandler) ListEvents(c echo.Context) error {
+func (h *TamperHandler) ListEvents(c *echo.Context) error {
 	agentID := c.Param("id")
 
 	// 获取分页参数
@@ -77,7 +77,7 @@ func (h *TamperHandler) ListEvents(c echo.Context) error {
 	return orz.Ok(c, page)
 }
 
-func (h *TamperHandler) DeleteEvents(c echo.Context) error {
+func (h *TamperHandler) DeleteEvents(c *echo.Context) error {
 	agentID := c.Param("id")
 	err := h.tamperService.DeleteEventsByAgentID(c.Request().Context(), agentID)
 	if err != nil {

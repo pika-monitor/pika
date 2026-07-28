@@ -9,12 +9,12 @@ import (
 	"github.com/dushixiang/pika/internal/protocol"
 	ws "github.com/dushixiang/pika/internal/websocket"
 	"github.com/gorilla/websocket"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"go.uber.org/zap"
 )
 
 // HandleWebSocket 处理WebSocket连接
-func (h *AgentHandler) HandleWebSocket(c echo.Context) error {
+func (h *AgentHandler) HandleWebSocket(c *echo.Context) error {
 	conn, err := h.upgrader.Upgrade(c.Response(), c.Request(), nil)
 	if err != nil {
 		h.logger.Error("failed to upgrade websocket", zap.Error(err))

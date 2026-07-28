@@ -50,7 +50,7 @@ const MonitorList = () => {
 
     // 过滤和搜索
     const filteredMonitors = useMemo(() => {
-        let result = monitors;
+        let result = [...monitors];
 
         // 搜索过滤
         if (searchKeyword.trim()) {
@@ -61,7 +61,7 @@ const MonitorList = () => {
             );
         }
 
-        return result;
+        return result.sort((a, b) => Number(a.status !== 'up') - Number(b.status !== 'up'));
     }, [monitors, searchKeyword]);
 
     // 统计信息
@@ -175,9 +175,8 @@ const MonitorList = () => {
             ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 md:gap-4 gap-2">
                     {filteredMonitors.map(monitor => (
-                        <Link to={`/monitors/${monitor.id}`}>
+                        <Link key={monitor.id} to={`/monitors/${monitor.id}`}>
                             <MonitorCard
-                                key={monitor.id}
                                 monitor={monitor}
                                 displayMode={displayMode}
                             />

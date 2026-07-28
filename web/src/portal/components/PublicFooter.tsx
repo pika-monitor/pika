@@ -1,4 +1,4 @@
-import {Heart, Github} from 'lucide-react';
+import {Heart} from 'lucide-react';
 
 const PublicFooter = () => {
     const currentYear = new Date().getFullYear();
@@ -20,7 +20,6 @@ const PublicFooter = () => {
                                 className="flex items-center gap-1.5 text-slate-600 dark:text-cyan-500 hover:text-cyan-500 dark:hover:text-cyan-300 transition-colors group"
                                 title="查看 GitHub 仓库"
                             >
-                                <Github className="h-3 w-3 group-hover:scale-110 transition-transform"/>
                                 <span className="underline decoration-slate-400 dark:decoration-cyan-700 underline-offset-2">Pika Monitor</span>
                             </a>
                             <span className="text-slate-500 dark:text-cyan-500/80 tracking-wider">{window.SystemConfig.Version}</span>

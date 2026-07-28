@@ -106,6 +106,13 @@ var alertTypeMetadataMap = map[string]AlertTypeMetadata{
 		ShowThreshold: true,
 		ShowActual:    true,
 	},
+	"agent_expire": {
+		Name:          "机器过期提醒",
+		ThresholdUnit: "天",
+		ValueUnit:     "天",
+		ShowThreshold: true,
+		ShowActual:    true,
+	},
 	"ssh_login": {
 		Name:          "SSH登录成功",
 		ThresholdUnit: "",

@@ -9,19 +9,19 @@ import (
 	"github.com/dushixiang/pika/internal/assets"
 	"github.com/dushixiang/pika/pkg/version"
 	"github.com/go-orz/orz"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"go.uber.org/zap"
 )
 
 // GetAgentVersion 获取 Agent 版本信息
-func (h *AgentHandler) GetAgentVersion(c echo.Context) error {
+func (h *AgentHandler) GetAgentVersion(c *echo.Context) error {
 	return orz.Ok(c, orz.Map{
 		"version": version.GetAgentVersion(),
 	})
 }
 
 // DownloadAgent 下载 Agent 二进制文件
-func (h *AgentHandler) DownloadAgent(c echo.Context) error {
+func (h *AgentHandler) DownloadAgent(c *echo.Context) error {
 	filename := c.Param("filename")
 	if filename == "" || strings.ContainsAny(filename, `/\`) {
 		return orz.NewError(400, "无效的 Agent 文件名")
@@ -63,7 +63,7 @@ func (h *AgentHandler) DownloadAgent(c echo.Context) error {
 }
 
 // getServerURL 获取服务器地址（仅从配置读取）
-func (h *AgentHandler) getServerURL(c echo.Context) string {
+func (h *AgentHandler) getServerURL(c *echo.Context) string {
 	// 优先读取配置的服务端地址
 	config, err := h.propertyService.GetAgentInstallConfig(c.Request().Context())
 	if err == nil && config.ServerURL != "" {
@@ -80,7 +80,7 @@ func bashSingleQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
-func (h *AgentHandler) GetServerUrl(c echo.Context) error {
+func (h *AgentHandler) GetServerUrl(c *echo.Context) error {
 	serverUrl := h.getServerURL(c)
 	return orz.Ok(c, orz.Map{
 		"serverUrl": serverUrl,
@@ -88,7 +88,7 @@ func (h *AgentHandler) GetServerUrl(c echo.Context) error {
 }
 
 // GetInstallScript 生成自动安装脚本
-func (h *AgentHandler) GetInstallScript(c echo.Context) error {
+func (h *AgentHandler) GetInstallScript(c *echo.Context) error {
 	token := c.QueryParam("token")
 	if token == "" {
 		return orz.NewError(400, "token不能为空")

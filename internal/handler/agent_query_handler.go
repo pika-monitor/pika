@@ -4,12 +4,12 @@ import (
 	"github.com/dushixiang/pika/internal/models"
 	"github.com/dushixiang/pika/internal/utils"
 	"github.com/go-orz/orz"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"gorm.io/datatypes"
 )
 
 // Get 获取探针详情（公开接口，已登录返回全部，未登录返回公开可见）
-func (h *AgentHandler) Get(c echo.Context) error {
+func (h *AgentHandler) Get(c *echo.Context) error {
 	id := c.Param("id")
 	ctx := c.Request().Context()
 
@@ -36,7 +36,7 @@ func (h *AgentHandler) Get(c echo.Context) error {
 }
 
 // GetAgents 获取探针列表（公开接口，已登录返回全部，未登录返回公开可见）
-func (h *AgentHandler) GetAgents(c echo.Context) error {
+func (h *AgentHandler) GetAgents(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	// 根据认证状态返回相应的探针列表
@@ -93,7 +93,7 @@ func (h *AgentHandler) buildAgentListItem(agent models.Agent, isAuthenticated bo
 }
 
 // GetTags 获取所有探针的标签
-func (h *AgentHandler) GetTags(c echo.Context) error {
+func (h *AgentHandler) GetTags(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	tags, err := h.agentService.GetAllTags(ctx)

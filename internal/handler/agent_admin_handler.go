@@ -10,7 +10,7 @@ import (
 	"github.com/dushixiang/pika/internal/models"
 	"github.com/dushixiang/pika/internal/protocol"
 	"github.com/go-orz/orz"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"go.uber.org/zap"
 )
 
@@ -31,7 +31,7 @@ func SortAgents(agents []models.Agent) {
 }
 
 // Paging 探针分页查询（返回完整列表，前端实现过滤）
-func (h *AgentHandler) Paging(c echo.Context) error {
+func (h *AgentHandler) Paging(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	// 获取所有探针（管理员接口）
@@ -47,7 +47,7 @@ func (h *AgentHandler) Paging(c echo.Context) error {
 }
 
 // GetForAdmin 获取探针详情（管理员接口，显示完整信息）
-func (h *AgentHandler) GetForAdmin(c echo.Context) error {
+func (h *AgentHandler) GetForAdmin(c *echo.Context) error {
 	id := c.Param("id")
 	ctx := c.Request().Context()
 
@@ -60,7 +60,7 @@ func (h *AgentHandler) GetForAdmin(c echo.Context) error {
 }
 
 // GetAdminLatestMetrics 获取探针最新指标（管理员接口，显示完整信息）
-func (h *AgentHandler) GetAdminLatestMetrics(c echo.Context) error {
+func (h *AgentHandler) GetAdminLatestMetrics(c *echo.Context) error {
 	id := c.Param("id")
 
 	metrics, ok := h.metricService.GetLatestMetrics(id)
@@ -71,7 +71,7 @@ func (h *AgentHandler) GetAdminLatestMetrics(c echo.Context) error {
 }
 
 // SendCommand 向探针发送指令
-func (h *AgentHandler) SendCommand(c echo.Context) error {
+func (h *AgentHandler) SendCommand(c *echo.Context) error {
 	agentID := c.Param("id")
 	cmdType := c.QueryParam("type")
 
@@ -116,7 +116,7 @@ func (h *AgentHandler) SendCommand(c echo.Context) error {
 }
 
 // GetAuditResult 获取审计结果(原始数据)
-func (h *AgentHandler) GetAuditResult(c echo.Context) error {
+func (h *AgentHandler) GetAuditResult(c *echo.Context) error {
 	agentID := c.Param("id")
 	ctx := c.Request().Context()
 
@@ -129,7 +129,7 @@ func (h *AgentHandler) GetAuditResult(c echo.Context) error {
 }
 
 // ListAuditResults 获取审计结果列表
-func (h *AgentHandler) ListAuditResults(c echo.Context) error {
+func (h *AgentHandler) ListAuditResults(c *echo.Context) error {
 	agentID := c.Param("id")
 	ctx := c.Request().Context()
 
@@ -145,7 +145,7 @@ func (h *AgentHandler) ListAuditResults(c echo.Context) error {
 }
 
 // UpdateInfo 更新探针信息（名称、标签、到期时间、可见性、权重、备注）
-func (h *AgentHandler) UpdateInfo(c echo.Context) error {
+func (h *AgentHandler) UpdateInfo(c *echo.Context) error {
 	agentID := c.Param("id")
 
 	var req struct {
@@ -182,7 +182,7 @@ func (h *AgentHandler) UpdateInfo(c echo.Context) error {
 }
 
 // GetStatistics 获取探针统计数据
-func (h *AgentHandler) GetStatistics(c echo.Context) error {
+func (h *AgentHandler) GetStatistics(c *echo.Context) error {
 	ctx := c.Request().Context()
 	stats, err := h.agentService.GetStatistics(ctx)
 	if err != nil {
@@ -193,7 +193,7 @@ func (h *AgentHandler) GetStatistics(c echo.Context) error {
 }
 
 // Delete 删除探针
-func (h *AgentHandler) Delete(c echo.Context) error {
+func (h *AgentHandler) Delete(c *echo.Context) error {
 	agentID := c.Param("id")
 	ctx := c.Request().Context()
 
@@ -246,7 +246,7 @@ func (h *AgentHandler) Delete(c echo.Context) error {
 }
 
 // CleanupOrphanedAgentMetrics 手动清除所有已删除探针残留的指标数据
-func (h *AgentHandler) CleanupOrphanedAgentMetrics(c echo.Context) error {
+func (h *AgentHandler) CleanupOrphanedAgentMetrics(c *echo.Context) error {
 	ctx := c.Request().Context()
 
 	h.logger.Info("开始手动清理残留探针指标数据")
@@ -264,7 +264,7 @@ func (h *AgentHandler) CleanupOrphanedAgentMetrics(c echo.Context) error {
 }
 
 // BatchUpdateTags 批量更新探针标签
-func (h *AgentHandler) BatchUpdateTags(c echo.Context) error {
+func (h *AgentHandler) BatchUpdateTags(c *echo.Context) error {
 	var req struct {
 		AgentIDs  []string `json:"agentIds"`
 		Tags      []string `json:"tags"`
@@ -300,7 +300,7 @@ func (h *AgentHandler) BatchUpdateTags(c echo.Context) error {
 }
 
 // BatchUpdateVisibility 批量更新探针可见性
-func (h *AgentHandler) BatchUpdateVisibility(c echo.Context) error {
+func (h *AgentHandler) BatchUpdateVisibility(c *echo.Context) error {
 	var req struct {
 		AgentIDs   []string `json:"agentIds"`
 		Visibility string   `json:"visibility"`
@@ -331,7 +331,7 @@ func (h *AgentHandler) BatchUpdateVisibility(c echo.Context) error {
 }
 
 // UpdateTrafficConfig 更新流量配置(管理员)
-func (h *AgentHandler) UpdateTrafficConfig(c echo.Context) error {
+func (h *AgentHandler) UpdateTrafficConfig(c *echo.Context) error {
 	agentID := c.Param("id")
 
 	var req struct {
@@ -354,7 +354,7 @@ func (h *AgentHandler) UpdateTrafficConfig(c echo.Context) error {
 }
 
 // GetTrafficStats 查询流量统计(管理员接口)
-func (h *AgentHandler) GetTrafficStats(c echo.Context) error {
+func (h *AgentHandler) GetTrafficStats(c *echo.Context) error {
 	agentID := c.Param("id")
 	ctx := c.Request().Context()
 
@@ -367,7 +367,7 @@ func (h *AgentHandler) GetTrafficStats(c echo.Context) error {
 }
 
 // ResetAgentTraffic 手动重置流量(管理员)
-func (h *AgentHandler) ResetAgentTraffic(c echo.Context) error {
+func (h *AgentHandler) ResetAgentTraffic(c *echo.Context) error {
 	agentID := c.Param("id")
 	ctx := c.Request().Context()
 

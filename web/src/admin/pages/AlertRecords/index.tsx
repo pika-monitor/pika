@@ -39,6 +39,7 @@ const AlertRecordList = () => {
         cert: 'HTTPS证书',
         service: '服务下线',
         agent_offline: '探针离线',
+        agent_expire: '机器到期',
     };
 
     // 告警级别映射
@@ -175,7 +176,7 @@ const AlertRecordList = () => {
                 if (record.alertType === 'network') {
                     return `${record.threshold.toFixed(2)} MB/s`;
                 }
-                if (record.alertType === 'cert') {
+                if (record.alertType === 'cert' || record.alertType === 'agent_expire') {
                     return `${record.threshold.toFixed(0)} 天`;
                 }
                 if (record.alertType === 'service' || record.alertType === 'agent_offline') {
@@ -192,7 +193,7 @@ const AlertRecordList = () => {
                 if (record.alertType === 'network') {
                     return `${record.actualValue.toFixed(2)} MB/s`;
                 }
-                if (record.alertType === 'cert') {
+                if (record.alertType === 'cert' || record.alertType === 'agent_expire') {
                     return `${record.actualValue.toFixed(0)} 天`;
                 }
                 if (record.alertType === 'service' || record.alertType === 'agent_offline') {
@@ -213,7 +214,7 @@ const AlertRecordList = () => {
                 if (record.alertType === 'network') {
                     return `${record.resolvedValue.toFixed(2)} MB/s`;
                 }
-                if (record.alertType === 'cert') {
+                if (record.alertType === 'cert' || record.alertType === 'agent_expire') {
                     return `${record.resolvedValue.toFixed(0)} 天`;
                 }
                 if (record.alertType === 'service' || record.alertType === 'agent_offline') {

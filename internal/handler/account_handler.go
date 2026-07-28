@@ -5,7 +5,7 @@ import (
 
 	"github.com/dushixiang/pika/internal/service"
 	"github.com/go-orz/orz"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 type AccountHandler struct {
@@ -25,7 +25,7 @@ type LoginRequest struct {
 }
 
 // Login 用户登录（Basic Auth）
-func (r AccountHandler) Login(c echo.Context) error {
+func (r AccountHandler) Login(c *echo.Context) error {
 	var req LoginRequest
 	if err := c.Bind(&req); err != nil {
 		return err
@@ -50,7 +50,7 @@ type OIDCLoginRequest struct {
 }
 
 // OIDCLogin OIDC 登录回调
-func (r AccountHandler) OIDCLogin(c echo.Context) error {
+func (r AccountHandler) OIDCLogin(c *echo.Context) error {
 	var req OIDCLoginRequest
 	if err := c.Bind(&req); err != nil {
 		return err
@@ -69,13 +69,13 @@ func (r AccountHandler) OIDCLogin(c echo.Context) error {
 }
 
 // GetAuthConfig 获取认证配置
-func (r AccountHandler) GetAuthConfig(c echo.Context) error {
+func (r AccountHandler) GetAuthConfig(c *echo.Context) error {
 	config := r.accountService.GetAuthConfig()
 	return orz.Ok(c, config)
 }
 
 // GetOIDCAuthURL 获取 OIDC 认证 URL
-func (r AccountHandler) GetOIDCAuthURL(c echo.Context) error {
+func (r AccountHandler) GetOIDCAuthURL(c *echo.Context) error {
 	authURL, err := r.accountService.GetOIDCAuthURL()
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
@@ -84,7 +84,7 @@ func (r AccountHandler) GetOIDCAuthURL(c echo.Context) error {
 }
 
 // GetGitHubAuthURL 获取 GitHub 认证 URL
-func (r AccountHandler) GetGitHubAuthURL(c echo.Context) error {
+func (r AccountHandler) GetGitHubAuthURL(c *echo.Context) error {
 	authURL, err := r.accountService.GetGitHubAuthURL()
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
@@ -99,7 +99,7 @@ type GitHubLoginRequest struct {
 }
 
 // GitHubLogin GitHub 登录回调
-func (r AccountHandler) GitHubLogin(c echo.Context) error {
+func (r AccountHandler) GitHubLogin(c *echo.Context) error {
 	var req GitHubLoginRequest
 	if err := c.Bind(&req); err != nil {
 		return err
@@ -118,7 +118,7 @@ func (r AccountHandler) GitHubLogin(c echo.Context) error {
 }
 
 // Logout 用户登出
-func (r AccountHandler) Logout(c echo.Context) error {
+func (r AccountHandler) Logout(c *echo.Context) error {
 	userID := c.Get("userID")
 	if userID == nil {
 		return orz.NewError(401, "未登录")
@@ -138,7 +138,7 @@ func (r AccountHandler) ValidateToken(tokenString string) (*service.JWTClaims, e
 }
 
 // GetCurrentUser 获取当前登录用户信息
-func (r AccountHandler) GetCurrentUser(c echo.Context) error {
+func (r AccountHandler) GetCurrentUser(c *echo.Context) error {
 	// 从 context 中获取用户信息（由 JWT 中间件设置）
 	userID := c.Get("userID")
 	username := c.Get("username")

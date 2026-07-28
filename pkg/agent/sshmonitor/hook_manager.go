@@ -3,7 +3,6 @@ package sshmonitor
 import (
 	"bufio"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -53,15 +52,15 @@ func (h *HookManager) Install() error {
 		return fmt.Errorf("配置 SSH UsePAM 失败: %w", err)
 	}
 
-	// 安装 Hook 可执行文件（软链）
+	// 安装 Hook 可执行文件（软链接）
 	if err := h.ensureHookBinary(); err != nil {
 		return fmt.Errorf("安装 Hook 可执行文件失败: %w", err)
 	}
 
 	// 修改 PAM 配置
 	if err := h.modifyPAMConfig(true); err != nil {
-		// 回滚软链
-		h.removeHookBinary()
+		// 回滚 Hook 可执行文件
+		_ = h.removeHookBinary()
 		return fmt.Errorf("修改 PAM 配置失败: %w", err)
 	}
 
@@ -71,36 +70,56 @@ func (h *HookManager) Install() error {
 
 // Uninstall 卸载 PAM Hook
 func (h *HookManager) Uninstall() error {
-	// 移除 PAM 配置
-	if err := h.modifyPAMConfig(false); err != nil {
-		slog.Warn("移除 PAM 配置失败", "error", err)
+	// 仅在配置确实存在时改写 PAM 文件，避免未启用过 SSH 监控时产生备份等副作用。
+	installed, legacyInstalled, err := h.installedConfigState()
+	if err != nil {
+		return fmt.Errorf("检查 PAM 配置失败: %w", err)
+	}
+	if installed || legacyInstalled {
+		if err := h.modifyPAMConfig(false); err != nil {
+			return fmt.Errorf("移除 PAM 配置失败: %w", err)
+		}
 	}
 
-	// 删除软链
-	h.removeHookBinary()
+	if err := h.removeHookBinary(); err != nil {
+		return fmt.Errorf("移除 PAM Hook 可执行文件失败: %w", err)
+	}
 
 	slog.Info("PAM Hook 卸载成功")
 	return nil
 }
 
-// isInstalled 检查是否已安装
-func (h *HookManager) isInstalled() bool {
-	// 检查 PAM 配置文件是否包含我们的配置行
+func (h *HookManager) installedConfigState() (installed, legacyInstalled bool, err error) {
 	f, err := os.Open(PAMConfigFile)
 	if err != nil {
-		return false
+		if os.IsNotExist(err) {
+			return false, false, nil
+		}
+		return false, false, err
 	}
 	defer f.Close()
 
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		if line == pamConfigLine() {
-			return true
+		switch line {
+		case pamConfigLine():
+			installed = true
+		case legacyPamConfigLine():
+			legacyInstalled = true
 		}
 	}
 
-	return false
+	if err := scanner.Err(); err != nil {
+		return false, false, err
+	}
+	return installed, legacyInstalled, nil
+}
+
+// isInstalled 检查是否已安装
+func (h *HookManager) isInstalled() bool {
+	installed, _, _ := h.installedConfigState()
+	return installed
 }
 
 // ensureHookBinary 确保 Hook 可执行文件存在
@@ -123,46 +142,41 @@ func (h *HookManager) ensureHookBinary() error {
 			if target, err := os.Readlink(HookBinaryPath); err == nil && target == execPath {
 				return nil
 			}
+			if err := os.Remove(HookBinaryPath); err != nil {
+				return err
+			}
+		} else {
+			return fmt.Errorf("Hook 路径已存在普通文件，拒绝覆盖: %s", HookBinaryPath)
 		}
+	} else if !os.IsNotExist(err) {
+		return err
 	}
 
-	_ = os.Remove(HookBinaryPath)
-
-	if err := os.Symlink(execPath, HookBinaryPath); err == nil {
-		return nil
+	if err := os.Symlink(execPath, HookBinaryPath); err != nil {
+		return fmt.Errorf("创建 Hook 软链接失败: %w", err)
 	}
-
-	return copyFile(execPath, HookBinaryPath, 0755)
+	return nil
 }
 
-func (h *HookManager) removeHookBinary() {
-	info, err := os.Lstat(HookBinaryPath)
+func (h *HookManager) removeHookBinary() error {
+	return removeHookSymlink(HookBinaryPath)
+}
+
+func removeHookSymlink(path string) error {
+	info, err := os.Lstat(path)
 	if err != nil {
-		return
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
 	}
+
 	if info.Mode()&os.ModeSymlink != 0 {
-		_ = os.Remove(HookBinaryPath)
-	}
-}
-
-func copyFile(src, dst string, perm os.FileMode) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	if _, err := io.Copy(out, in); err != nil {
-		return err
+		return os.Remove(path)
 	}
 
-	return os.Chmod(dst, perm)
+	// 兼容旧版本：普通文件可能是主程序、旧版复制品或用户文件，无法确认所有权时保留。
+	return nil
 }
 
 // modifyPAMConfig 修改 PAM 配置

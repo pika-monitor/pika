@@ -3,7 +3,7 @@ package handler
 import (
 	"github.com/dushixiang/pika/internal/service"
 	"github.com/go-orz/orz"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"go.uber.org/zap"
 )
 
@@ -20,7 +20,7 @@ func NewAlertHandler(logger *zap.Logger, alertService *service.AlertService) *Al
 }
 
 // ListAlertRecords 列出告警记录
-func (h *AlertHandler) ListAlertRecords(c echo.Context) error {
+func (h *AlertHandler) ListAlertRecords(c *echo.Context) error {
 	agentID := c.QueryParam("agentId")
 
 	pr := orz.GetPageRequest(c, "createdAt", "firedAt")
@@ -43,7 +43,7 @@ func (h *AlertHandler) ListAlertRecords(c echo.Context) error {
 }
 
 // ClearAlertRecords 清空告警记录
-func (h *AlertHandler) ClearAlertRecords(c echo.Context) error {
+func (h *AlertHandler) ClearAlertRecords(c *echo.Context) error {
 	if err := h.alertService.Clear(c.Request().Context()); err != nil {
 		h.logger.Error("清空告警记录失败", zap.Error(err))
 		return orz.NewError(500, "清空告警记录失败")

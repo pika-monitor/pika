@@ -91,6 +91,31 @@ func (m *Monitor) Stop() error {
 	return m.stopInternal()
 }
 
+// Uninstall 清理 SSH 登录监控安装的持久配置和运行时文件。
+func (m *Monitor) Uninstall() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.enabled {
+		if err := m.stopInternal(); err != nil {
+			return err
+		}
+	} else {
+		if err := os.Remove(m.socketPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("移除 socket 失败: %w", err)
+		}
+		if err := m.hookManager.Uninstall(); err != nil {
+			return err
+		}
+	}
+
+	if err := os.Remove(DefaultSocketDir); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("移除 socket 目录失败: %w", err)
+	}
+
+	return nil
+}
+
 // stopInternal 内部停止方法（不加锁）
 func (m *Monitor) stopInternal() error {
 	if !m.enabled {
@@ -109,18 +134,19 @@ func (m *Monitor) stopInternal() error {
 		m.listener = nil
 	}
 
+	var cleanupErr error
 	if err := os.Remove(m.socketPath); err != nil && !os.IsNotExist(err) {
-		slog.Warn("移除 socket 失败", "error", err, "path", m.socketPath)
+		cleanupErr = errors.Join(cleanupErr, fmt.Errorf("移除 socket 失败: %w", err))
 	}
 
 	// 卸载 PAM Hook
 	if err := m.hookManager.Uninstall(); err != nil {
-		slog.Warn("卸载 PAM Hook 失败", "error", err)
+		cleanupErr = errors.Join(cleanupErr, fmt.Errorf("卸载 PAM Hook 失败: %w", err))
 	}
 
 	m.enabled = false
 	slog.Info("SSH登录监控已停止")
-	return nil
+	return cleanupErr
 }
 
 // GetEvents 获取事件通道

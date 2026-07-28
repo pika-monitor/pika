@@ -4,7 +4,7 @@ import (
 	"github.com/dushixiang/pika/internal/service"
 	"github.com/dushixiang/pika/internal/utils"
 	"github.com/go-orz/orz"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"go.uber.org/zap"
 )
 
@@ -24,7 +24,7 @@ func NewMonitorHandler(logger *zap.Logger, monitorService *service.MonitorServic
 	}
 }
 
-func (h *MonitorHandler) List(c echo.Context) error {
+func (h *MonitorHandler) List(c *echo.Context) error {
 	keyword := c.QueryParam("keyword")
 	enabled := c.QueryParam("enabled")
 
@@ -76,7 +76,7 @@ func (h *MonitorHandler) List(c echo.Context) error {
 	return orz.Ok(c, page)
 }
 
-func (h *MonitorHandler) Create(c echo.Context) error {
+func (h *MonitorHandler) Create(c *echo.Context) error {
 	var req service.MonitorTaskRequest
 	if err := c.Bind(&req); err != nil {
 		return orz.NewError(400, "请求参数错误")
@@ -91,7 +91,7 @@ func (h *MonitorHandler) Create(c echo.Context) error {
 	return orz.Ok(c, item)
 }
 
-func (h *MonitorHandler) Get(c echo.Context) error {
+func (h *MonitorHandler) Get(c *echo.Context) error {
 	id := c.Param("id")
 
 	ctx := c.Request().Context()
@@ -103,7 +103,7 @@ func (h *MonitorHandler) Get(c echo.Context) error {
 	return orz.Ok(c, item)
 }
 
-func (h *MonitorHandler) Update(c echo.Context) error {
+func (h *MonitorHandler) Update(c *echo.Context) error {
 	id := c.Param("id")
 
 	var req service.MonitorTaskRequest
@@ -120,7 +120,7 @@ func (h *MonitorHandler) Update(c echo.Context) error {
 	return orz.Ok(c, item)
 }
 
-func (h *MonitorHandler) Delete(c echo.Context) error {
+func (h *MonitorHandler) Delete(c *echo.Context) error {
 	id := c.Param("id")
 
 	ctx := c.Request().Context()
@@ -140,7 +140,7 @@ func (h *MonitorHandler) Delete(c echo.Context) error {
 }
 
 // GetMonitors 获取所有监控统计数据
-func (h *MonitorHandler) GetMonitors(c echo.Context) error {
+func (h *MonitorHandler) GetMonitors(c *echo.Context) error {
 	ctx := c.Request().Context()
 	stats, err := h.monitorService.ListByAuth(ctx, utils.IsAuthenticated(c))
 	if err != nil {
@@ -151,7 +151,7 @@ func (h *MonitorHandler) GetMonitors(c echo.Context) error {
 }
 
 // GetStatsByID 获取指定监控任务的统计数据（公开接口，已登录返回全部，未登录返回公开可见）
-func (h *MonitorHandler) GetStatsByID(c echo.Context) error {
+func (h *MonitorHandler) GetStatsByID(c *echo.Context) error {
 	id := c.Param("id")
 	ctx := c.Request().Context()
 
@@ -169,7 +169,7 @@ func (h *MonitorHandler) GetStatsByID(c echo.Context) error {
 }
 
 // GetAgentStatsByID 获取指定监控任务各探针的统计数据（公开接口，已登录返回全部，未登录返回公开可见）
-func (h *MonitorHandler) GetAgentStatsByID(c echo.Context) error {
+func (h *MonitorHandler) GetAgentStatsByID(c *echo.Context) error {
 	id := c.Param("id")
 	ctx := c.Request().Context()
 
@@ -186,7 +186,7 @@ func (h *MonitorHandler) GetAgentStatsByID(c echo.Context) error {
 }
 
 // GetHistoryByID 获取指定监控任务的历史响应时间数据（公开接口，已登录返回全部，未登录返回公开可见）
-func (h *MonitorHandler) GetHistoryByID(c echo.Context) error {
+func (h *MonitorHandler) GetHistoryByID(c *echo.Context) error {
 	id := c.Param("id")
 	ctx := c.Request().Context()
 

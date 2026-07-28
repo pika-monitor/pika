@@ -7,7 +7,7 @@ import (
 
 	"github.com/dushixiang/pika/internal/utils"
 	"github.com/go-orz/orz"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 )
 
 var validMetricTypes = map[string]struct{}{
@@ -93,7 +93,7 @@ func validateMetricType(metricType string) error {
 }
 
 // GetMetrics 获取探针聚合指标（公开接口，已登录返回全部，未登录返回公开可见）
-func (h *AgentHandler) GetMetrics(c echo.Context) error {
+func (h *AgentHandler) GetMetrics(c *echo.Context) error {
 	shortID := c.Param("id")
 	ctx := c.Request().Context()
 
@@ -132,7 +132,7 @@ func (h *AgentHandler) GetMetrics(c echo.Context) error {
 }
 
 // GetLatestMetrics 获取探针最新指标（公开接口，已登录返回全部，未登录返回公开可见）
-func (h *AgentHandler) GetLatestMetrics(c echo.Context) error {
+func (h *AgentHandler) GetLatestMetrics(c *echo.Context) error {
 	shortID := c.Param("id")
 	ctx := c.Request().Context()
 
@@ -156,7 +156,7 @@ func (h *AgentHandler) GetLatestMetrics(c echo.Context) error {
 }
 
 // GetAvailableNetworkInterfaces 获取探针的可用网卡列表（公开接口，已登录返回全部，未登录返回公开可见）
-func (h *AgentHandler) GetAvailableNetworkInterfaces(c echo.Context) error {
+func (h *AgentHandler) GetAvailableNetworkInterfaces(c *echo.Context) error {
 	shortID := c.Param("id")
 	ctx := c.Request().Context()
 

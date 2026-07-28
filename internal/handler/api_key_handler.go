@@ -5,7 +5,7 @@ import (
 
 	"github.com/dushixiang/pika/internal/service"
 	"github.com/go-orz/orz"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"go.uber.org/zap"
 )
 
@@ -33,7 +33,7 @@ type UpdateApiKeyNameRequest struct {
 }
 
 // Paging API密钥分页查询
-func (r ApiKeyHandler) Paging(c echo.Context) error {
+func (r ApiKeyHandler) Paging(c *echo.Context) error {
 	name := c.QueryParam("name")
 	apiKeyType := c.QueryParam("type")
 
@@ -62,7 +62,7 @@ func (r ApiKeyHandler) Paging(c echo.Context) error {
 }
 
 // Create 生成API密钥（仅限通信密钥 type=agent）
-func (r ApiKeyHandler) Create(c echo.Context) error {
+func (r ApiKeyHandler) Create(c *echo.Context) error {
 	// API Key 不能创建其他 API Key
 	if c.Get("authType") == "api_key" {
 		return echo.NewHTTPError(http.StatusForbidden, "API Key 不能创建其他 API Key")
@@ -93,7 +93,7 @@ func (r ApiKeyHandler) Create(c echo.Context) error {
 }
 
 // CreateAdmin 生成管理 API Key（type=admin，完整 key 仅创建时返回一次）
-func (r ApiKeyHandler) CreateAdmin(c echo.Context) error {
+func (r ApiKeyHandler) CreateAdmin(c *echo.Context) error {
 	// API Key 不能创建其他 API Key
 	if c.Get("authType") == "api_key" {
 		return echo.NewHTTPError(http.StatusForbidden, "API Key 不能创建其他 API Key")
@@ -120,7 +120,7 @@ func (r ApiKeyHandler) CreateAdmin(c echo.Context) error {
 }
 
 // Get 获取API密钥详情
-func (r ApiKeyHandler) Get(c echo.Context) error {
+func (r ApiKeyHandler) Get(c *echo.Context) error {
 	// API Key 不能查看其他 API Key 的完整值
 	if c.Get("authType") == "api_key" {
 		return echo.NewHTTPError(http.StatusForbidden, "API Key 不能查看其他 API Key")
@@ -141,7 +141,7 @@ func (r ApiKeyHandler) Get(c echo.Context) error {
 }
 
 // GetRaw 获取API密钥完整值（仅在生成安装命令等场景使用）
-func (r ApiKeyHandler) GetRaw(c echo.Context) error {
+func (r ApiKeyHandler) GetRaw(c *echo.Context) error {
 	// 仅 JWT 认证可用
 	if c.Get("authType") == "api_key" {
 		return echo.NewHTTPError(http.StatusForbidden, "API Key 不能查看其他 API Key")
@@ -167,7 +167,7 @@ func (r ApiKeyHandler) GetRaw(c echo.Context) error {
 }
 
 // Update 更新API密钥名称
-func (r ApiKeyHandler) Update(c echo.Context) error {
+func (r ApiKeyHandler) Update(c *echo.Context) error {
 	// API Key 不能修改其他 API Key
 	if c.Get("authType") == "api_key" {
 		return echo.NewHTTPError(http.StatusForbidden, "API Key 不能修改其他 API Key")
@@ -193,7 +193,7 @@ func (r ApiKeyHandler) Update(c echo.Context) error {
 }
 
 // Delete 删除API密钥
-func (r ApiKeyHandler) Delete(c echo.Context) error {
+func (r ApiKeyHandler) Delete(c *echo.Context) error {
 	// API Key 不能删除其他 API Key
 	if c.Get("authType") == "api_key" {
 		return echo.NewHTTPError(http.StatusForbidden, "API Key 不能删除其他 API Key")
@@ -211,7 +211,7 @@ func (r ApiKeyHandler) Delete(c echo.Context) error {
 }
 
 // Enable 启用API密钥
-func (r ApiKeyHandler) Enable(c echo.Context) error {
+func (r ApiKeyHandler) Enable(c *echo.Context) error {
 	// API Key 不能启用/禁用其他 API Key
 	if c.Get("authType") == "api_key" {
 		return echo.NewHTTPError(http.StatusForbidden, "API Key 不能启用/禁用其他 API Key")
@@ -229,7 +229,7 @@ func (r ApiKeyHandler) Enable(c echo.Context) error {
 }
 
 // Disable 禁用API密钥
-func (r ApiKeyHandler) Disable(c echo.Context) error {
+func (r ApiKeyHandler) Disable(c *echo.Context) error {
 	// API Key 不能启用/禁用其他 API Key
 	if c.Get("authType") == "api_key" {
 		return echo.NewHTTPError(http.StatusForbidden, "API Key 不能启用/禁用其他 API Key")

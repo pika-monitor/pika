@@ -134,6 +134,15 @@ const TrafficStats: React.FC<TrafficStatsProps> = ({agentId}) => {
         return '#52c41a';
     };
 
+    const formatCurrentPeriod = (periodStart: number, periodEnd: number, resetDay: number) => {
+        if (periodStart <= 0) return '尚未开始统计';
+
+        const start = dayjs(periodStart).format('YYYY-MM-DD');
+        if (resetDay <= 0 || periodEnd <= 0) return `${start} 起（不自动重置）`;
+
+        return `${start} ~ ${dayjs(periodEnd).format('YYYY-MM-DD')}`;
+    };
+
     return (
         <Space orientation="vertical" size="large" style={{width: '100%'}}>
             <Alert
@@ -320,10 +329,12 @@ const TrafficStats: React.FC<TrafficStatsProps> = ({agentId}) => {
                                         {stats.resetDay > 0 ? `每月 ${stats.resetDay} 号` : '不自动重置'}
                                     </Descriptions.Item>
                                     <Descriptions.Item label="当前周期">
-                                        {dayjs(stats.periodStart).format('YYYY-MM-DD')} ~ {dayjs(stats.periodEnd).format('YYYY-MM-DD')}
+                                        {formatCurrentPeriod(stats.periodStart, stats.periodEnd, stats.resetDay)}
                                     </Descriptions.Item>
                                     <Descriptions.Item label="距离重置">
-                                        {stats.daysUntilReset > 0 ? `${stats.daysUntilReset} 天` : '今日重置'}
+                                        {stats.resetDay <= 0
+                                            ? '不自动重置'
+                                            : stats.daysUntilReset > 0 ? `${stats.daysUntilReset} 天` : '今日重置'}
                                     </Descriptions.Item>
                                     {/* 告警状态 - 仅在有限额时显示 */}
                                     {stats.limit > 0 && (

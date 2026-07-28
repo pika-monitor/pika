@@ -13,6 +13,11 @@ import (
 	"gorm.io/gorm"
 )
 
+const (
+	agentExpireAlertType         = "agent_expire"
+	agentExpireReminderThreshold = 7
+)
+
 // AlertService 告警服务
 type AlertService struct {
 	Service           *orz.Service
@@ -339,6 +344,195 @@ func (s *AlertService) sendAlertNotificationSync(ctx context.Context, record *mo
 	}
 
 	return s.notifier.SendNotificationByConfigs(ctx, enabledChannels, record, agent, alertConfig.MaskIP)
+}
+
+// CheckAgentExpireAlerts 检查机器到期提醒
+func (s *AlertService) CheckAgentExpireAlerts(ctx context.Context) error {
+	alertConfig, err := s.propertyService.GetAlertConfig(ctx)
+	if err != nil {
+		s.logger.Error("获取全局告警配置失败", zap.Error(err))
+		return err
+	}
+
+	if !alertConfig.Enabled {
+		return nil
+	}
+
+	now := time.Now().UnixMilli()
+	agents, err := s.agentRepo.FindAll(ctx)
+	if err != nil {
+		return err
+	}
+
+	for _, agent := range agents {
+		if err := s.checkAgentExpireAlert(ctx, &agent, now); err != nil {
+			s.logger.Error("检查机器过期提醒失败",
+				zap.String("agentId", agent.ID),
+				zap.Error(err),
+			)
+		}
+	}
+
+	return nil
+}
+
+func (s *AlertService) checkAgentExpireAlert(ctx context.Context, agent *models.Agent, now int64) error {
+	stateKey := fmt.Sprintf("%s:global:%s:%s", agent.ID, agentExpireAlertType, agent.ID)
+	state, err := s.AlertStateRepo.GetAlertState(ctx, stateKey)
+	if err != nil {
+		state = &models.AlertState{
+			ID:        stateKey,
+			AgentID:   agent.ID,
+			AlertType: agentExpireAlertType,
+		}
+	}
+
+	daysLeft := agentExpireDaysLeft(agent.ExpireTime, now)
+	state.AgentID = agent.ID
+	state.AlertType = agentExpireAlertType
+	state.Threshold = float64(agentExpireReminderThreshold)
+	state.Duration = 0
+	state.Value = daysLeft
+	state.LastCheckTime = now
+
+	dayMs := int64(24 * time.Hour / time.Millisecond)
+	var shouldFire, shouldResolve bool
+	if agent.ExpireTime > 0 && agent.ExpireTime-now <= int64(agentExpireReminderThreshold)*dayMs {
+		if !state.IsFiring {
+			shouldFire = true
+			state.IsFiring = true
+		}
+	} else {
+		if state.IsFiring {
+			shouldResolve = true
+		}
+	}
+
+	if err := s.AlertStateRepo.SaveAlertState(ctx, state); err != nil {
+		return fmt.Errorf("保存告警状态失败: %w", err)
+	}
+
+	if shouldFire {
+		s.fireAgentExpireAlert(ctx, agent, state, now)
+	}
+	if shouldResolve {
+		s.resolveAgentExpireAlert(ctx, agent, state)
+	}
+
+	return nil
+}
+
+func (s *AlertService) fireAgentExpireAlert(ctx context.Context, agent *models.Agent, state *models.AlertState, now int64) {
+	s.logger.Info("触发机器过期提醒",
+		zap.String("agentId", agent.ID),
+		zap.String("agentName", agent.Name),
+		zap.Int64("expireTime", agent.ExpireTime),
+		zap.Float64("daysLeft", state.Value),
+	)
+
+	record := &models.AlertRecord{
+		AgentID:     agent.ID,
+		AgentName:   agent.Name,
+		AlertType:   agentExpireAlertType,
+		Message:     s.buildAgentExpireMessage(agent, now),
+		Threshold:   float64(agentExpireReminderThreshold),
+		ActualValue: state.Value,
+		Level:       s.calculateAgentExpireLevel(state.Value),
+		Status:      "firing",
+		FiredAt:     now,
+		CreatedAt:   now,
+	}
+
+	if err := s.AlertRecordRepo.CreateAlertRecord(ctx, record); err != nil {
+		s.logger.Error("创建机器过期提醒记录失败", zap.Error(err))
+		return
+	}
+
+	state.LastRecordID = record.ID
+	if err := s.AlertStateRepo.SaveAlertState(ctx, state); err != nil {
+		s.logger.Error("保存告警状态失败", zap.Error(err))
+		return
+	}
+
+	go s.sendAlertNotification(record, agent)
+}
+
+func (s *AlertService) resolveAgentExpireAlert(ctx context.Context, agent *models.Agent, state *models.AlertState) {
+	s.logger.Info("机器过期提醒恢复",
+		zap.String("agentId", agent.ID),
+		zap.String("agentName", agent.Name),
+		zap.Int64("expireTime", agent.ExpireTime),
+		zap.Float64("daysLeft", state.Value),
+	)
+
+	if state.LastRecordID > 0 {
+		existingRecord, err := s.AlertRecordRepo.GetAlertRecordByID(ctx, state.LastRecordID)
+		if err != nil {
+			s.logger.Error("获取机器过期提醒记录失败", zap.Error(err))
+		} else if existingRecord != nil && existingRecord.Status == "firing" {
+			now := time.Now().UnixMilli()
+			existingRecord.Status = "resolved"
+			existingRecord.ResolvedValue = state.Value
+			existingRecord.ResolvedAt = now
+			existingRecord.UpdatedAt = now
+
+			if err := s.AlertRecordRepo.UpdateAlertRecord(ctx, existingRecord); err != nil {
+				s.logger.Error("更新机器过期提醒记录失败", zap.Error(err))
+			} else {
+				go s.sendAlertNotification(existingRecord, agent)
+			}
+		}
+	}
+
+	state.IsFiring = false
+	state.LastRecordID = 0
+	if err := s.AlertStateRepo.SaveAlertState(ctx, state); err != nil {
+		s.logger.Error("保存告警状态失败", zap.Error(err))
+	}
+}
+
+func (s *AlertService) buildAgentExpireMessage(agent *models.Agent, now int64) string {
+	agentName := agent.Name
+	if agentName == "" {
+		agentName = agent.Hostname
+	}
+	if agentName == "" {
+		agentName = agent.ID
+	}
+
+	expireAt := time.UnixMilli(agent.ExpireTime).Format("2006-01-02 15:04:05")
+	if agent.ExpireTime <= now {
+		return fmt.Sprintf("机器 %s 已于 %s 过期", agentName, expireAt)
+	}
+
+	remaining := agent.ExpireTime - now
+	dayMs := int64(24 * time.Hour / time.Millisecond)
+	if remaining < dayMs {
+		return fmt.Sprintf("机器 %s 将于 %s 过期，剩余不足1天", agentName, expireAt)
+	}
+
+	days := remaining / dayMs
+	if remaining%dayMs != 0 {
+		days++
+	}
+	return fmt.Sprintf("机器 %s 将于 %s 过期，剩余%d天", agentName, expireAt, days)
+}
+
+func (s *AlertService) calculateAgentExpireLevel(daysLeft float64) string {
+	if daysLeft <= 0 {
+		return "critical"
+	}
+	if daysLeft <= 3 {
+		return "warning"
+	}
+	return "info"
+}
+
+func agentExpireDaysLeft(expireTime int64, now int64) float64 {
+	if expireTime <= 0 {
+		return 0
+	}
+	return float64(expireTime-now) / float64(24*time.Hour/time.Millisecond)
 }
 
 // CheckMonitorAlerts 检查监控相关告警（证书和服务下线）
