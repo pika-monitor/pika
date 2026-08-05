@@ -428,6 +428,38 @@ export interface SendCommandResponse {
     status: string;
 }
 
+export interface CommandTask {
+    id: string;
+    agentId: string;
+    command: string;
+    status: 'pending' | 'running' | 'cancelling' | 'success' | 'error' | 'cancelled';
+    output?: string;
+    error?: string;
+    exitCode?: number;
+    timeoutSeconds: number;
+    truncated: boolean;
+    startedAt?: number;
+    finishedAt?: number;
+    createdAt: number;
+    updatedAt: number;
+}
+
+export const createCommandTask = (agentId: string, command: string, timeoutSeconds: number) => {
+    return post<CommandTask>(`/admin/agents/${agentId}/commands`, {command, timeoutSeconds});
+};
+
+export const listCommandTasks = (agentId: string) => {
+    return get<CommandTask[]>(`/admin/agents/${agentId}/commands`);
+};
+
+export const getCommandTask = (agentId: string, commandId: string) => {
+    return get<CommandTask>(`/admin/agents/${agentId}/commands/${commandId}`);
+};
+
+export const cancelCommandTask = (agentId: string, commandId: string) => {
+    return post<CommandTask>(`/admin/agents/${agentId}/commands/${commandId}/cancel`, {});
+};
+
 // 发送审计指令
 export const sendAuditCommand = (agentId: string) => {
     return post<SendCommandResponse>(`/admin/agents/${agentId}/command?type=vps_audit`, {});

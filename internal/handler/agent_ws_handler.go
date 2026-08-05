@@ -185,7 +185,20 @@ func (h *AgentHandler) handleCommandResponseMessage(ctx context.Context, agentID
 	if err := json.Unmarshal(data, &cmdResp); err != nil {
 		return err
 	}
-	return h.agentService.HandleCommandResponse(ctx, agentID, &cmdResp)
+	if err := h.agentService.HandleCommandResponse(ctx, agentID, &cmdResp); err != nil {
+		return err
+	}
+	if cmdResp.Type != "shell_exec" || (cmdResp.Status != "success" && cmdResp.Status != "error" && cmdResp.Status != "cancelled") {
+		return nil
+	}
+	ackData, err := json.Marshal(protocol.OutboundMessage{
+		Type: protocol.MessageTypeCommandAck,
+		Data: protocol.CommandResponseAck{ID: cmdResp.ID},
+	})
+	if err != nil {
+		return err
+	}
+	return h.wsManager.SendToClient(agentID, ackData)
 }
 
 func (h *AgentHandler) handleTamperEventMessage(ctx context.Context, agentID string, data json.RawMessage) error {

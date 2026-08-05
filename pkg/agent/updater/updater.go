@@ -12,6 +12,9 @@ import (
 
 	"github.com/dushixiang/pika/pkg/agent/config"
 	"github.com/minio/selfupdate"
+	"path/filepath"
+	"strings"
+	"sync"
 )
 
 // VersionInfo 版本信息
@@ -25,6 +28,8 @@ type Updater struct {
 	currentVer     string
 	httpClient     *http.Client
 	executablePath string
+	mu             sync.Mutex
+	updating       bool
 }
 
 // New 创建更新器
@@ -100,6 +105,22 @@ func (u *Updater) CheckAndUpdate() {
 
 	slog.Info("发现新版本", "new_version", versionInfo.Version, "current_version", u.currentVer)
 
+	// 加锁防止并发更新
+	u.mu.Lock()
+	if u.updating {
+		u.mu.Unlock()
+		slog.Warn("更新已在进行中，跳过本次触发")
+		return
+	}
+	u.updating = true
+	u.mu.Unlock()
+
+	defer func() {
+		u.mu.Lock()
+		u.updating = false
+		u.mu.Unlock()
+	}()
+
 	// 下载新版本
 	if err := u.downloadAndUpdate(versionInfo); err != nil {
 		slog.Error("更新失败", "error", err)
@@ -152,8 +173,25 @@ func (u *Updater) downloadAndUpdate(versionInfo *VersionInfo) error {
 		return fmt.Errorf("HTTP 状态码: %d", resp.StatusCode)
 	}
 
+	// 检查当前运行的文件名，避免在 .old 文件中运行并尝试更新
+	if strings.HasSuffix(u.executablePath, ".old") {
+		return fmt.Errorf("当前程序正在以备份模式 (.old) 运行，跳过自动更新以避免递归错误: %s", u.executablePath)
+	}
+
+	// 检查并清理旧的备份文件，避免 selfupdate 因旧文件存在而产生的冲突（如构建 .old.old 路径失败）
+	targetPath := u.executablePath
+	oldPath := filepath.Join(filepath.Dir(targetPath), "."+filepath.Base(targetPath)+".old")
+	if _, err := os.Stat(oldPath); err == nil {
+		slog.Info("发现旧的备份文件，正在清理以确保更新顺利", "path", oldPath)
+		if removeErr := os.Remove(oldPath); removeErr != nil {
+			slog.Warn("清理旧备份文件失败 (非致命)", "error", removeErr)
+		}
+	}
+
 	// 使用 selfupdate 应用更新
-	if err := selfupdate.Apply(resp.Body, selfupdate.Options{}); err != nil {
+	if err := selfupdate.Apply(resp.Body, selfupdate.Options{
+		TargetPath: targetPath,
+	}); err != nil {
 		return fmt.Errorf("应用更新失败: %w", err)
 	}
 

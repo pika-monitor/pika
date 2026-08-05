@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -44,6 +45,9 @@ type safeConn struct {
 func (sc *safeConn) WriteJSON(v interface{}) error {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
+	if err := sc.conn.SetWriteDeadline(time.Now().Add(agentWriteWait)); err != nil {
+		return err
+	}
 	return sc.conn.WriteJSON(v)
 }
 
@@ -51,6 +55,9 @@ func (sc *safeConn) WriteJSON(v interface{}) error {
 func (sc *safeConn) WriteMessage(messageType int, data []byte) error {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
+	if err := sc.conn.SetWriteDeadline(time.Now().Add(agentWriteWait)); err != nil {
+		return err
+	}
 	return sc.conn.WriteMessage(messageType, data)
 }
 
@@ -73,27 +80,35 @@ func (sc *safeConn) WriteControl(messageType int, data []byte, deadline time.Tim
 
 // Agent 探针服务
 type Agent struct {
-	cfg              *config.Config
-	idMgr            *id.Manager
-	cancel           context.CancelFunc
-	connMu           sync.RWMutex
-	activeConn       *safeConn
-	collectorMu      sync.RWMutex
-	collectorManager *collector.Manager
-	metricsStore     *metricsStore
-	tamperProtector  *tamper.Protector
-	sshMonitor       *sshmonitor.Monitor
+	cfg                     *config.Config
+	idMgr                   *id.Manager
+	cancel                  context.CancelFunc
+	connMu                  sync.RWMutex
+	activeConn              *safeConn
+	collectorMu             sync.RWMutex
+	collectorManager        *collector.Manager
+	metricsStore            *metricsStore
+	tamperProtector         *tamper.Protector
+	sshMonitor              *sshmonitor.Monitor
+	commandMu               sync.Mutex
+	commandCancels          map[string]context.CancelFunc
+	commandCancelled        map[string]struct{}
+	commandResponseMu       sync.Mutex
+	pendingCommandResponses map[string]protocol.CommandResponse
 }
 
 // New 创建 Agent 实例
 func New(cfg *config.Config) *Agent {
 	return &Agent{
-		cfg:              cfg,
-		idMgr:            id.NewManager(),
-		collectorManager: collector.NewManager(cfg),
-		metricsStore:     newMetricsStore(),
-		tamperProtector:  tamper.NewProtector(),
-		sshMonitor:       sshmonitor.NewMonitor(),
+		cfg:                     cfg,
+		idMgr:                   id.NewManager(),
+		collectorManager:        collector.NewManager(cfg),
+		metricsStore:            newMetricsStore(),
+		tamperProtector:         tamper.NewProtector(),
+		sshMonitor:              sshmonitor.NewMonitor(),
+		commandCancels:          make(map[string]context.CancelFunc),
+		commandCancelled:        make(map[string]struct{}),
+		pendingCommandResponses: make(map[string]protocol.CommandResponse),
 	}
 }
 
@@ -154,6 +169,11 @@ func (a *Agent) Stop() {
 	if a.cancel != nil {
 		a.cancel()
 	}
+	a.commandMu.Lock()
+	for _, cancel := range a.commandCancels {
+		cancel()
+	}
+	a.commandMu.Unlock()
 }
 
 // runOnce 运行一次探针连接
@@ -209,6 +229,7 @@ func (a *Agent) runOnce(ctx context.Context, onRegistered func()) error {
 	slog.Info("探针注册成功，开始监控...")
 
 	a.setActiveConn(conn)
+	a.flushPendingCommandResponses()
 	// 重置发送游标，使下一个 sendLoop tick 立即发送当前全量快照，
 	// 保证重连瞬间服务端就能拿到最新数据
 	a.metricsStore.reset()
@@ -309,6 +330,8 @@ func (a *Agent) readLoop(conn *websocket.Conn, done chan struct{}) error {
 		switch msg.Type {
 		case protocol.MessageTypeCommand:
 			go a.handleCommand(msg.Data)
+		case protocol.MessageTypeCommandAck:
+			a.handleCommandResponseAck(msg.Data)
 		case protocol.MessageTypeMonitorConfig:
 			go a.handleMonitorConfig(msg.Data)
 		case protocol.MessageTypeTamperProtect:
@@ -588,16 +611,146 @@ func (a *Agent) handleCommand(data json.RawMessage) {
 
 	slog.Info("收到指令", "type", cmdReq.Type, "id", cmdReq.ID)
 
-	// 发送运行中状态
-	a.sendCommandResponse(cmdReq.ID, cmdReq.Type, "running", "", "")
-
 	switch cmdReq.Type {
 	case "vps_audit":
+		a.sendCommandResponse(cmdReq.ID, cmdReq.Type, "running", "", "")
 		a.handleVPSAudit(cmdReq.ID)
+	case "shell_exec":
+		a.handleShellCommand(cmdReq)
+	case "shell_cancel":
+		a.cancelShellCommand(cmdReq.ID)
 	default:
 		slog.Warn("未知指令类型", "type", cmdReq.Type)
 		a.sendCommandResponse(cmdReq.ID, cmdReq.Type, "error", "未知指令类型", "")
 	}
+}
+
+const (
+	maxShellCommandOutputBytes = 1024 * 1024
+	maxConcurrentCommands      = 4
+)
+
+type commandOutputState struct {
+	mu        sync.Mutex
+	total     int
+	truncated bool
+	send      func(string, string)
+}
+
+type commandOutputWriter struct {
+	stream string
+	state  *commandOutputState
+}
+
+func (w *commandOutputWriter) Write(p []byte) (int, error) {
+	w.state.mu.Lock()
+	defer w.state.mu.Unlock()
+
+	originalLen := len(p)
+	remaining := maxShellCommandOutputBytes - w.state.total
+	if remaining <= 0 {
+		w.state.truncated = true
+		return originalLen, nil
+	}
+	if len(p) > remaining {
+		p = p[:remaining]
+		w.state.truncated = true
+	}
+	w.state.total += len(p)
+	if len(p) > 0 {
+		w.state.send(w.stream, string(p))
+	}
+	return originalLen, nil
+}
+
+func (a *Agent) handleShellCommand(req protocol.CommandRequest) {
+	if strings.TrimSpace(req.Command) == "" {
+		a.sendCommandResponse(req.ID, "shell_exec", "error", "命令不能为空", "")
+		return
+	}
+	if len(req.Command) > 8192 {
+		a.sendCommandResponse(req.ID, "shell_exec", "error", "命令长度不能超过 8192 字节", "")
+		return
+	}
+	timeoutSeconds := req.TimeoutSeconds
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 60
+	}
+	if timeoutSeconds > 3600 {
+		timeoutSeconds = 3600
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds)*time.Second)
+	a.commandMu.Lock()
+	if len(a.commandCancels) >= maxConcurrentCommands {
+		a.commandMu.Unlock()
+		cancel()
+		a.sendCommandResponse(req.ID, "shell_exec", "error", "并发命令数量已达到上限", "")
+		return
+	}
+	if _, exists := a.commandCancelled[req.ID]; exists {
+		delete(a.commandCancelled, req.ID)
+		cancel()
+	}
+	a.commandCancels[req.ID] = cancel
+	a.commandMu.Unlock()
+	defer func() {
+		cancel()
+		a.commandMu.Lock()
+		delete(a.commandCancels, req.ID)
+		delete(a.commandCancelled, req.ID)
+		a.commandMu.Unlock()
+	}()
+
+	cmd := newShellCommand(ctx, req.Command)
+
+	state := &commandOutputState{send: func(stream, output string) {
+		a.sendCommandResponseMessage(protocol.CommandResponse{
+			ID: req.ID, Type: "shell_exec", Status: "running", Stream: stream, Output: output,
+		})
+	}}
+	cmd.Stdout = &commandOutputWriter{stream: "stdout", state: state}
+	cmd.Stderr = &commandOutputWriter{stream: "stderr", state: state}
+
+	a.sendCommandResponse(req.ID, "shell_exec", "running", "", "")
+	err := cmd.Run()
+	exitCode := 0
+	status := "success"
+	errMessage := ""
+	if err != nil {
+		status = "error"
+		errMessage = err.Error()
+		var exitErr interface{ ExitCode() int }
+		if errors.As(err, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = -1
+		}
+	}
+	if errors.Is(ctx.Err(), context.Canceled) {
+		status = "cancelled"
+		errMessage = "任务已取消"
+	} else if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		status = "error"
+		errMessage = fmt.Sprintf("命令执行超过 %d 秒", timeoutSeconds)
+	}
+
+	state.mu.Lock()
+	truncated := state.truncated
+	state.mu.Unlock()
+	a.sendTerminalCommandResponse(protocol.CommandResponse{
+		ID: req.ID, Type: "shell_exec", Status: status, Error: errMessage, ExitCode: &exitCode, Truncated: truncated,
+	})
+}
+
+func (a *Agent) cancelShellCommand(commandID string) {
+	a.commandMu.Lock()
+	if cancel, exists := a.commandCancels[commandID]; exists {
+		cancel()
+	} else {
+		a.commandCancelled[commandID] = struct{}{}
+	}
+	a.commandMu.Unlock()
 }
 
 // handleVPSAudit 处理VPS安全审计指令
@@ -636,13 +789,54 @@ func (a *Agent) sendCommandResponse(cmdID, cmdType, status, errMsg, result strin
 		Error:  errMsg,
 		Result: result,
 	}
+	if cmdType == "shell_exec" && (status == "success" || status == "error" || status == "cancelled") {
+		a.sendTerminalCommandResponse(resp)
+		return
+	}
+	a.sendCommandResponseMessage(resp)
+}
 
+func (a *Agent) sendCommandResponseMessage(resp protocol.CommandResponse) {
 	if err := a.sendOutboundMessage(protocol.OutboundMessage{
 		Type: protocol.MessageTypeCommandResp,
 		Data: resp,
 	}); err != nil {
 		slog.Warn("发送指令响应失败", "error", err)
 	}
+}
+
+func (a *Agent) sendTerminalCommandResponse(resp protocol.CommandResponse) {
+	a.commandResponseMu.Lock()
+	if a.pendingCommandResponses == nil {
+		a.pendingCommandResponses = make(map[string]protocol.CommandResponse)
+	}
+	a.pendingCommandResponses[resp.ID] = resp
+	a.commandResponseMu.Unlock()
+	a.sendCommandResponseMessage(resp)
+}
+
+func (a *Agent) flushPendingCommandResponses() {
+	a.commandResponseMu.Lock()
+	pending := make([]protocol.CommandResponse, 0, len(a.pendingCommandResponses))
+	for _, resp := range a.pendingCommandResponses {
+		pending = append(pending, resp)
+	}
+	a.commandResponseMu.Unlock()
+
+	for _, resp := range pending {
+		a.sendCommandResponseMessage(resp)
+	}
+}
+
+func (a *Agent) handleCommandResponseAck(data json.RawMessage) {
+	var ack protocol.CommandResponseAck
+	if err := json.Unmarshal(data, &ack); err != nil {
+		slog.Warn("解析命令响应确认失败", "error", err)
+		return
+	}
+	a.commandResponseMu.Lock()
+	delete(a.pendingCommandResponses, ack.ID)
+	a.commandResponseMu.Unlock()
 }
 
 // GetVersion 获取 Agent 版本号

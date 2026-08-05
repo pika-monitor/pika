@@ -17,6 +17,8 @@ import (
 	"gorm.io/gorm"
 )
 
+const maxCommandOutputBytes = 1024 * 1024
+
 type AgentService struct {
 	logger *zap.Logger
 	*orz.Service
@@ -189,10 +191,74 @@ func (s *AgentService) HandleCommandResponse(ctx context.Context, agentID string
 	switch resp.Type {
 	case "vps_audit":
 		return s.handleVPSAuditResponse(ctx, agentID, resp)
+	case "shell_exec":
+		return s.handleShellCommandResponse(ctx, agentID, resp)
 	default:
 		s.logger.Warn("unknown command type", zap.String("type", resp.Type))
 		return nil
 	}
+}
+
+func (s *AgentService) handleShellCommandResponse(ctx context.Context, agentID string, resp *protocol.CommandResponse) error {
+	task, err := s.AgentRepo.GetCommandTask(ctx, agentID, resp.ID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			s.logger.Warn("command task not found", zap.String("agentID", agentID), zap.String("commandID", resp.ID))
+			return nil
+		}
+		return err
+	}
+
+	updates := map[string]interface{}{"status": resp.Status}
+	now := time.Now().UnixMilli()
+	if resp.Status == "running" && task.StartedAt == 0 {
+		updates["started_at"] = now
+	}
+	if resp.Output != "" && len(task.Output) < maxCommandOutputBytes {
+		remaining := maxCommandOutputBytes - len(task.Output)
+		chunk := resp.Output
+		if len(chunk) > remaining {
+			chunk = chunk[:remaining]
+			updates["truncated"] = true
+		}
+		updates["output"] = task.Output + chunk
+	}
+	if resp.Truncated {
+		updates["truncated"] = true
+	}
+	if resp.Error != "" {
+		updates["error"] = resp.Error
+	}
+	if resp.ExitCode != nil {
+		updates["exit_code"] = *resp.ExitCode
+	}
+	if resp.Status == "success" || resp.Status == "error" || resp.Status == "cancelled" {
+		updates["finished_at"] = now
+	}
+
+	return s.AgentRepo.UpdateCommandTask(ctx, resp.ID, updates)
+}
+
+func (s *AgentService) CreateCommandTask(ctx context.Context, task *models.CommandTask) error {
+	return s.AgentRepo.CreateCommandTask(ctx, task)
+}
+
+func (s *AgentService) GetCommandTask(ctx context.Context, agentID, commandID string) (*models.CommandTask, error) {
+	if err := s.AgentRepo.ExpireStaleCommandTasks(ctx, agentID, time.Now().UnixMilli()); err != nil {
+		return nil, err
+	}
+	task, err := s.AgentRepo.GetCommandTask(ctx, agentID, commandID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, orz.NewError(404, "命令任务不存在")
+	}
+	return task, err
+}
+
+func (s *AgentService) ListCommandTasks(ctx context.Context, agentID string) ([]models.CommandTask, error) {
+	if err := s.AgentRepo.ExpireStaleCommandTasks(ctx, agentID, time.Now().UnixMilli()); err != nil {
+		return nil, err
+	}
+	return s.AgentRepo.ListCommandTasks(ctx, agentID, 50)
 }
 
 // handleVPSAuditResponse 处理VPS审计响应
@@ -380,6 +446,10 @@ func (s *AgentService) DeleteAgent(ctx context.Context, agentID string) error {
 		// 1. 删除探针的审计结果
 		if err := s.AgentRepo.DeleteAuditResults(ctx, agentID); err != nil {
 			s.logger.Error("删除探针审计结果失败", zap.String("agentId", agentID), zap.Error(err))
+			return err
+		}
+		if err := s.AgentRepo.DeleteCommandTasks(ctx, agentID); err != nil {
+			s.logger.Error("删除探针命令任务失败", zap.String("agentId", agentID), zap.Error(err))
 			return err
 		}
 

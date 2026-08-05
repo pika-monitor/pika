@@ -58,6 +58,7 @@ const (
 	MessageTypeRegisterErr MessageType = "register_error"
 	MessageTypeCommand     MessageType = "command"
 	MessageTypeCommandResp MessageType = "command_response"
+	MessageTypeCommandAck  MessageType = "command_response_ack"
 	MessageTypeUninstall   MessageType = "uninstall"
 	// 指标消息（批量）
 	MessageTypeMetrics       MessageType = "metrics"
@@ -220,18 +221,28 @@ type TemperatureData struct {
 
 // CommandRequest 指令请求
 type CommandRequest struct {
-	ID   string `json:"id"`   // 指令ID
-	Type string `json:"type"` // 指令类型: vps_audit
-	Args string `json:"args,omitempty"`
+	ID             string `json:"id"`   // 指令ID
+	Type           string `json:"type"` // 指令类型: vps_audit/shell_exec/shell_cancel
+	Args           string `json:"args,omitempty"`
+	Command        string `json:"command,omitempty"`
+	TimeoutSeconds int    `json:"timeoutSeconds,omitempty"`
 }
 
 // CommandResponse 指令响应
 type CommandResponse struct {
-	ID     string `json:"id"`               // 指令ID
-	Type   string `json:"type"`             // 指令类型
-	Status string `json:"status"`           // running/success/error
-	Error  string `json:"error,omitempty"`  // 错误信息
-	Result string `json:"result,omitempty"` // 结果数据(JSON字符串)
+	ID        string `json:"id"`                 // 指令ID
+	Type      string `json:"type"`               // 指令类型
+	Status    string `json:"status"`             // running/success/error/cancelled
+	Error     string `json:"error,omitempty"`    // 错误信息
+	Result    string `json:"result,omitempty"`   // 结果数据(JSON字符串)
+	Output    string `json:"output,omitempty"`   // 命令增量输出
+	Stream    string `json:"stream,omitempty"`   // stdout/stderr
+	ExitCode  *int   `json:"exitCode,omitempty"` // 进程退出码
+	Truncated bool   `json:"truncated,omitempty"`
+}
+
+type CommandResponseAck struct {
+	ID string `json:"id"`
 }
 
 // VPSAuditResult VPS资产采集结果(Agent端只负责采集,不做安全判断)

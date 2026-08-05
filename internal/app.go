@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -124,6 +125,77 @@ func setupApi(app *orz.App, components *AppComponents) error {
 	e.Use(middleware.Recover())
 	e.Use(ErrorHandler(logger))
 
+	// 自定义 IP 提取器中间件（支持任意 header）
+	// 框架只支持 x-forwarded-for/x-real-ip/direct，其他配置会被 fallback 到 direct
+	// 这里统一处理：从配置的 header 取 IP，并验证 trust list 防止伪造
+	cfg := app.GetConfig()
+	if cfg != nil && cfg.Server.IPExtractor != "" && cfg.Server.IPExtractor != "direct" {
+		headerName := cfg.Server.IPExtractor
+
+		// 解析 trust list，支持 CIDR 格式 (10.0.0.0/8) 或普通 IP (127.0.0.1 自动补 /32 或 /128)
+		var trustCIDRs []*net.IPNet
+		for _, s := range cfg.Server.IPTrustList {
+			s = strings.TrimSpace(s)
+			if s == "" {
+				continue
+			}
+			// 先尝试 CIDR 格式
+			_, cidr, err := net.ParseCIDR(s)
+			if err != nil {
+				// 尝试普通 IP，自动补 /32 (IPv4) 或 /128 (IPv6)
+				ip := net.ParseIP(s)
+				if ip == nil {
+					logger.Warn("invalid IP in trust list", zap.String("ip", s))
+					continue
+				}
+				// 根据 IP 类型补 CIDR 后缀
+				if ip.To4() != nil {
+					_, cidr, err = net.ParseCIDR(s + "/32")
+				} else {
+					_, cidr, err = net.ParseCIDR(s + "/128")
+				}
+				if err != nil {
+					logger.Warn("failed to parse IP as CIDR", zap.String("ip", s), zap.Error(err))
+					continue
+				}
+			}
+			trustCIDRs = append(trustCIDRs, cidr)
+		}
+
+		e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+			return func(c *echo.Context) error {
+				// 验证请求来源是否在 trust list 中
+				if len(trustCIDRs) > 0 {
+					remoteIP, _, _ := net.SplitHostPort(c.Request().RemoteAddr)
+					if remoteIP == "" {
+						remoteIP = c.Request().RemoteAddr
+					}
+					trusted := false
+					for _, cidr := range trustCIDRs {
+						if cidr.Contains(net.ParseIP(remoteIP)) {
+							trusted = true
+							break
+						}
+					}
+					if !trusted {
+						return next(c) // 非可信来源，不信任 header
+					}
+				}
+
+				// 从 header 取 IP
+				ip := c.Request().Header.Get(headerName)
+				if ip != "" {
+					if idx := strings.IndexByte(ip, ','); idx > 0 {
+						ip = strings.TrimSpace(ip[:idx])
+					}
+					c.Request().RemoteAddr = ip
+				}
+				return next(c)
+			}
+		})
+		logger.Info("custom IP extractor configured", zap.String("header", headerName), zap.Int("trustedCIDRs", len(trustCIDRs)))
+	}
+
 	webDir := assets.WebDir()
 	if err := assets.RenderUIFilesInDir(webDir, components.PropertyService); err != nil {
 		return fmt.Errorf("render ui files: %w", err)
@@ -238,6 +310,10 @@ func setupApi(app *orz.App, components *AppComponents) error {
 		adminApi.DELETE("/agents/:id", components.AgentHandler.Delete)
 		adminApi.POST("/agents/cleanup-metrics", components.AgentHandler.CleanupOrphanedAgentMetrics) // 清理残留指标数据
 		adminApi.POST("/agents/:id/command", components.AgentHandler.SendCommand)
+		adminApi.POST("/agents/:id/commands", components.AgentHandler.CreateCommandTask)
+		adminApi.GET("/agents/:id/commands", components.AgentHandler.ListCommandTasks)
+		adminApi.GET("/agents/:id/commands/:commandId", components.AgentHandler.GetCommandTask)
+		adminApi.POST("/agents/:id/commands/:commandId/cancel", components.AgentHandler.CancelCommandTask)
 
 		// 流量管理（管理员访问）
 		adminApi.GET("/agents/:id/traffic", components.AgentHandler.GetTrafficStats)
@@ -310,6 +386,7 @@ func autoMigrate(database *gorm.DB) error {
 		&models.Agent{},         // 探针
 		&models.ApiKey{},        // ApiKey
 		&models.AuditResult{},   // 审计历史
+		&models.CommandTask{},   // 远程命令任务
 		&models.Property{},      // 系统属性
 		&models.AlertRecord{},   // 告警记录
 		&models.AlertState{},    // 告警状态

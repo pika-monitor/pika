@@ -161,6 +161,65 @@ func (r *AgentRepo) DeleteAuditResults(ctx context.Context, agentID string) erro
 		Delete(&models.AuditResult{}).Error
 }
 
+func (r *AgentRepo) CreateCommandTask(ctx context.Context, task *models.CommandTask) error {
+	return r.db.WithContext(ctx).Create(task).Error
+}
+
+func (r *AgentRepo) GetCommandTask(ctx context.Context, agentID, commandID string) (*models.CommandTask, error) {
+	var task models.CommandTask
+	err := r.db.WithContext(ctx).
+		Where("agent_id = ? AND id = ?", agentID, commandID).
+		First(&task).Error
+	if err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
+func (r *AgentRepo) ListCommandTasks(ctx context.Context, agentID string, limit int) ([]models.CommandTask, error) {
+	var tasks []models.CommandTask
+	err := r.db.WithContext(ctx).
+		Select("id", "agent_id", "command", "status", "error", "exit_code", "timeout_seconds", "truncated", "started_at", "finished_at", "created_at", "updated_at").
+		Where("agent_id = ?", agentID).
+		Order("created_at DESC").
+		Limit(limit).
+		Find(&tasks).Error
+	return tasks, err
+}
+
+func (r *AgentRepo) UpdateCommandTask(ctx context.Context, commandID string, values map[string]interface{}) error {
+	return r.db.WithContext(ctx).
+		Model(&models.CommandTask{}).
+		Where("id = ?", commandID).
+		Updates(values).Error
+}
+
+func (r *AgentRepo) TransitionCommandTaskStatus(ctx context.Context, agentID, commandID string, from []string, to string) (bool, error) {
+	result := r.db.WithContext(ctx).
+		Model(&models.CommandTask{}).
+		Where("agent_id = ? AND id = ? AND status IN ?", agentID, commandID, from).
+		Update("status", to)
+	return result.RowsAffected == 1, result.Error
+}
+
+func (r *AgentRepo) ExpireStaleCommandTasks(ctx context.Context, agentID string, now int64) error {
+	return r.db.WithContext(ctx).
+		Model(&models.CommandTask{}).
+		Where("agent_id = ? AND status IN ? AND created_at + timeout_seconds * 1000 + 30000 < ?",
+			agentID, []string{"pending", "running", "cancelling"}, now).
+		Updates(map[string]interface{}{
+			"status":      "error",
+			"error":       "任务超过执行时限且未收到 Agent 最终状态",
+			"finished_at": now,
+		}).Error
+}
+
+func (r *AgentRepo) DeleteCommandTasks(ctx context.Context, agentID string) error {
+	return r.db.WithContext(ctx).
+		Where("agent_id = ?", agentID).
+		Delete(&models.CommandTask{}).Error
+}
+
 // FindPublicAgents 查找所有公开可见的探针
 func (r *AgentRepo) FindPublicAgents(ctx context.Context) ([]models.Agent, error) {
 	var agents []models.Agent
