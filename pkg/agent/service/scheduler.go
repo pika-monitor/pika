@@ -12,7 +12,7 @@ import (
 	"github.com/pika-monitor/pika/pkg/agent/collector"
 )
 
-// collectorBaseInterval 采集循环的基础节奏，所有采集器的采集间隔必须是它的整数倍
+// collectorBaseInterval 采集循环检查到期任务的基础节奏
 const collectorBaseInterval = 1 * time.Second
 
 // slowCollectorThreshold 单个采集器耗时超过此阈值时打印慢日志
@@ -24,14 +24,16 @@ type collectFn func() (protocol.MetricSample, error)
 // collectorSpec 描述一个周期性采集器
 type collectorSpec struct {
 	name     string
-	required bool          // required=true 时采集失败计入错误；GPU/温度等可选项为 false
-	interval time.Duration // 必须为 collectorBaseInterval 的整数倍
+	required bool // required=true 时采集失败计入错误；GPU/温度等可选项为 false
+	interval time.Duration
 	fn       collectFn
 	running  atomic.Bool
+	nextDue  time.Time
 }
 
-// metricsScheduler 按 tick 调度并行采集，封装到期判定、并发执行、错误分类
+// metricsScheduler 按到期时间调度并行采集，封装到期判定、并发执行、错误分类
 type metricsScheduler struct {
+	mu         sync.Mutex
 	collectors []collectorSpec
 }
 
@@ -39,14 +41,14 @@ type metricsScheduler struct {
 func newMetricsScheduler(m *collector.Manager) *metricsScheduler {
 	return &metricsScheduler{
 		collectors: []collectorSpec{
-			{name: "cpu", required: true, interval: time.Second, fn: m.CollectCPU},
-			{name: "memory", required: true, interval: time.Second, fn: m.CollectMemory},
-			{name: "disk_io", required: true, interval: time.Second, fn: m.CollectDiskIO},
-			{name: "network", required: true, interval: time.Second, fn: m.CollectNetwork},
-			{name: "gpu", interval: time.Second, fn: m.CollectGPU},
-			{name: "network_connection", required: true, interval: time.Second, fn: m.CollectNetworkConnection},
-			{name: "temperature", interval: 5 * time.Second, fn: m.CollectTemperature},
-			{name: "disk", required: true, interval: 30 * time.Second, fn: m.CollectDisk},
+			{name: "cpu", required: true, interval: 2 * time.Second, fn: m.CollectCPU},
+			{name: "memory", required: true, interval: 5 * time.Second, fn: m.CollectMemory},
+			{name: "disk_io", required: true, interval: 2 * time.Second, fn: m.CollectDiskIO},
+			{name: "network", required: true, interval: 2 * time.Second, fn: m.CollectNetwork},
+			{name: "gpu", interval: 5 * time.Second, fn: m.CollectGPU},
+			{name: "network_connection", required: true, interval: 10 * time.Second, fn: m.CollectNetworkConnection},
+			{name: "temperature", interval: 15 * time.Second, fn: m.CollectTemperature},
+			{name: "disk", required: true, interval: 60 * time.Second, fn: m.CollectDisk},
 			{name: "host", required: true, interval: 60 * time.Second, fn: m.CollectHost},
 		},
 	}
@@ -60,20 +62,26 @@ type collectResult struct {
 	err      error
 }
 
-// collect 执行本次 tick 到期的采集器，返回样本与是否有错误。
+// collect 按实际时间执行到期的采集器，错过的周期不补跑。
 // 到期采集器并行执行，每个有 panic 恢复；错误按 ErrNoData/required/optional 三态分类。
-func (s *metricsScheduler) collect(tickCount uint64) (samples []protocol.MetricSample, hasError bool) {
+func (s *metricsScheduler) collect(now time.Time) (samples []protocol.MetricSample, hasError bool) {
 	results := make(chan collectResult, len(s.collectors))
 	var wg sync.WaitGroup
 
+	s.mu.Lock()
 	for i := range s.collectors {
 		c := &s.collectors[i]
-		every := uint64(c.interval / collectorBaseInterval)
-		if every == 0 || tickCount%every != 0 {
+		if c.interval <= 0 || now.Before(c.nextDue) {
 			continue
 		}
 		if !c.running.CompareAndSwap(false, true) {
 			continue
+		}
+		if c.nextDue.IsZero() {
+			c.nextDue = now.Add(c.interval)
+		} else {
+			missed := now.Sub(c.nextDue) / c.interval
+			c.nextDue = c.nextDue.Add((missed + 1) * c.interval)
 		}
 
 		wg.Go(func() {
@@ -93,6 +101,7 @@ func (s *metricsScheduler) collect(tickCount uint64) (samples []protocol.MetricS
 			results <- collectResult{name: c.name, required: c.required, sample: sample, err: err}
 		})
 	}
+	s.mu.Unlock()
 
 	wg.Wait()
 	close(results)

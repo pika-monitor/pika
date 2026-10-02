@@ -572,15 +572,13 @@ func (a *Agent) collectLoop(ctx context.Context) {
 	// 采集器表只构造一次，后续每个 tick 复用
 	scheduler := newMetricsScheduler(manager)
 
-	var tickCount uint64
 	ticker := time.NewTicker(collectorBaseInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			a.collectOnce(scheduler, tickCount)
-			tickCount++
+			a.collectOnce(scheduler, time.Now())
 		case <-ctx.Done():
 			return
 		}
@@ -588,14 +586,14 @@ func (a *Agent) collectLoop(ctx context.Context) {
 }
 
 // collectOnce 在超时保护下采集本 tick 到期的指标并写入快照存储。
-func (a *Agent) collectOnce(scheduler *metricsScheduler, tickCount uint64) {
+func (a *Agent) collectOnce(scheduler *metricsScheduler, now time.Time) {
 	type collectionResult struct {
 		samples  []protocol.MetricSample
 		hasError bool
 	}
 	done := make(chan collectionResult, 1)
 	go func() {
-		samples, hasError := scheduler.collect(tickCount)
+		samples, hasError := scheduler.collect(now)
 		done <- collectionResult{samples: samples, hasError: hasError}
 	}()
 

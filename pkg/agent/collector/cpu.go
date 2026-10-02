@@ -3,7 +3,6 @@ package collector
 import (
 	"runtime"
 	"sync"
-	"time"
 
 	"github.com/pika-monitor/pika/internal/protocol"
 
@@ -12,6 +11,8 @@ import (
 
 // CPUCollector CPU 监控采集器
 type CPUCollector struct {
+	mu      sync.Mutex
+	sampled bool
 	// 缓存不常变化的信息
 	logicalCores  int
 	physicalCores int
@@ -51,17 +52,14 @@ func (c *CPUCollector) init() {
 
 // Collect 采集 CPU 数据(返回完整数据,包括静态和动态信息)
 func (c *CPUCollector) Collect() (*protocol.CPUData, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.init()
 
 	// 获取 CPU 总体使用率
-	percentages, err := cpu.Percent(time.Second, false)
+	cpuPercent, err := c.collectUsage(func() ([]float64, error) { return cpu.Percent(0, false) })
 	if err != nil {
 		return nil, err
-	}
-
-	cpuPercent := 0.0
-	if len(percentages) > 0 {
-		cpuPercent = percentages[0]
 	}
 
 	return &protocol.CPUData{
@@ -70,4 +68,19 @@ func (c *CPUCollector) Collect() (*protocol.CPUData, error) {
 		ModelName:     c.modelName,
 		UsagePercent:  cpuPercent,
 	}, nil
+}
+
+func (c *CPUCollector) collectUsage(load func() ([]float64, error)) (float64, error) {
+	percentages, err := load()
+	if err != nil {
+		return 0, err
+	}
+	if len(percentages) == 0 {
+		return 0, ErrNoData
+	}
+	if !c.sampled {
+		c.sampled = true
+		return 0, ErrNoData
+	}
+	return percentages[0], nil
 }
