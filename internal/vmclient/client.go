@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
 )
+
+const maxConnectionsPerHost = 128
 
 // VMClient VictoriaMetrics 客户端
 type VMClient struct {
@@ -63,11 +66,34 @@ func NewVMClient(baseURL string, writeTimeout, queryTimeout time.Duration) *VMCl
 	return &VMClient{
 		baseURL: baseURL,
 		httpClient: &http.Client{
-			Timeout: writeTimeout, // 默认超时
+			// 默认 Transport 每个目标仅保留 2 个空闲连接，大量探针并发
+			// 写入时会频繁建连，耗尽临时端口。专用连接池同时限制活跃连接，
+			// 达到上限的请求等待可复用连接，并受各操作的 context 超时约束。
+			Transport: &http.Transport{
+				Proxy: http.ProxyFromEnvironment,
+				DialContext: (&net.Dialer{
+					Timeout:   30 * time.Second,
+					KeepAlive: 30 * time.Second,
+				}).DialContext,
+				ForceAttemptHTTP2:     true,
+				MaxIdleConns:          maxConnectionsPerHost,
+				MaxIdleConnsPerHost:   maxConnectionsPerHost,
+				MaxConnsPerHost:       maxConnectionsPerHost,
+				IdleConnTimeout:       90 * time.Second,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ExpectContinueTimeout: time.Second,
+			},
 		},
 		writeTimeout: writeTimeout,
 		queryTimeout: queryTimeout,
 	}
+}
+
+// closeResponseBody 读取到 EOF 后关闭，确保 HTTP/1.1 连接可以放回连接池。
+// 读取受请求 context 的超时约束，即使响应无效也不会无限等待。
+func closeResponseBody(body io.ReadCloser) {
+	_, _ = io.Copy(io.Discard, body)
+	_ = body.Close()
 }
 
 // Write 写入指标（VictoriaMetrics JSON Line Format）
@@ -99,13 +125,16 @@ func (c *VMClient) Write(ctx context.Context, metrics []Metric) error {
 	if err != nil {
 		return fmt.Errorf("write metrics failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeResponseBody(resp.Body)
 
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("write metrics failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		return fmt.Errorf("read write response failed: %w", err)
+	}
 	return nil
 }
 
@@ -166,7 +195,7 @@ func (c *VMClient) QueryRange(ctx context.Context, query string, start, end time
 	if err != nil {
 		return nil, fmt.Errorf("query range failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeResponseBody(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -204,7 +233,7 @@ func (c *VMClient) Query(ctx context.Context, query string) (*QueryResult, error
 	if err != nil {
 		return nil, fmt.Errorf("query failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeResponseBody(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -247,7 +276,7 @@ func (c *VMClient) DeleteSeries(ctx context.Context, matchers []string) error {
 	if err != nil {
 		return fmt.Errorf("delete series failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeResponseBody(resp.Body)
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		body, _ := io.ReadAll(resp.Body)
@@ -319,7 +348,7 @@ func (c *VMClient) GetLabelValues(ctx context.Context, labelName string, match [
 	if err != nil {
 		return nil, fmt.Errorf("get label values failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer closeResponseBody(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
