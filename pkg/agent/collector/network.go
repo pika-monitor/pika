@@ -2,6 +2,7 @@ package collector
 
 import (
 	"net"
+	"sync"
 	"time"
 
 	"github.com/pika-monitor/pika/internal/protocol"
@@ -11,7 +12,10 @@ import (
 
 // NetworkCollector 网络监控采集器
 type NetworkCollector struct {
-	config *config.Config // 配置信息
+	mu           sync.Mutex
+	config       *config.Config // 配置信息
+	previous     map[string]gopsutilNet.IOCountersStat
+	previousTime time.Time
 }
 
 // safeDelta 计算网络计数器的增量,当出现重置或回绕时返回当前值避免溢出
@@ -23,6 +27,17 @@ func safeDelta(current, previous uint64) uint64 {
 	return 0
 }
 
+func counterRate(delta uint64, elapsed float64) uint64 {
+	if elapsed <= 0 {
+		return 0
+	}
+	rate := float64(delta) / elapsed
+	if rate >= float64(^uint64(0)) {
+		return ^uint64(0)
+	}
+	return uint64(rate)
+}
+
 // NewNetworkCollector 创建网络采集器
 func NewNetworkCollector(cfg *config.Config) *NetworkCollector {
 	return &NetworkCollector{
@@ -30,22 +45,22 @@ func NewNetworkCollector(cfg *config.Config) *NetworkCollector {
 	}
 }
 
-// Collect 采集网络数据(间隔1秒采集两次计算速率)
+// Collect 采集网络数据并根据相邻采样的时间差计算速率
 func (n *NetworkCollector) Collect() ([]protocol.NetworkData, error) {
-	// 第一次采集
-	firstCounters, _, err := n.collectOnce()
-	if err != nil {
-		return nil, err
-	}
-
-	// 间隔1秒
-	time.Sleep(1 * time.Second)
-
-	// 第二次采集
+	n.mu.Lock()
+	defer n.mu.Unlock()
 	secondCounters, secondInterfaces, err := n.collectOnce()
 	if err != nil {
 		return nil, err
 	}
+	now := time.Now()
+	elapsed := now.Sub(n.previousTime).Seconds()
+	firstStatsMap := n.previous
+	n.previous = make(map[string]gopsutilNet.IOCountersStat, len(secondCounters))
+	for _, counter := range secondCounters {
+		n.previous[counter.Name] = counter
+	}
+	n.previousTime = now
 
 	// 创建接口信息映射(使用第二次采集的接口信息)
 	interfaceMap := make(map[string]protocol.NetworkData)
@@ -79,12 +94,6 @@ func (n *NetworkCollector) Collect() ([]protocol.NetworkData, error) {
 		}
 	}
 
-	// 创建第一次采集的统计数据映射
-	firstStatsMap := make(map[string]gopsutilNet.IOCountersStat)
-	for _, counter := range firstCounters {
-		firstStatsMap[counter.Name] = counter
-	}
-
 	// 计算速率(基于两次采集的差值)
 	var networkDataList []protocol.NetworkData
 	for _, counter := range secondCounters {
@@ -106,12 +115,11 @@ func (n *NetworkCollector) Collect() ([]protocol.NetworkData, error) {
 		netData.BytesRecvTotal = counter.BytesRecv
 
 		// 计算速率(如果第一次采集有数据)
-		if firstStat, exists := firstStatsMap[counter.Name]; exists {
+		if firstStat, exists := firstStatsMap[counter.Name]; exists && elapsed > 0 {
 			bytesSentDelta := safeDelta(counter.BytesSent, firstStat.BytesSent)
 			bytesRecvDelta := safeDelta(counter.BytesRecv, firstStat.BytesRecv)
-			// 间隔固定为1秒
-			netData.BytesSentRate = bytesSentDelta
-			netData.BytesRecvRate = bytesRecvDelta
+			netData.BytesSentRate = counterRate(bytesSentDelta, elapsed)
+			netData.BytesRecvRate = counterRate(bytesRecvDelta, elapsed)
 		} else {
 			// 如果第一次采集没有该网卡数据,速率为0
 			netData.BytesSentRate = 0

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pika-monitor/pika/internal/protocol"
@@ -26,6 +27,7 @@ type collectorSpec struct {
 	required bool          // required=true 时采集失败计入错误；GPU/温度等可选项为 false
 	interval time.Duration // 必须为 collectorBaseInterval 的整数倍
 	fn       collectFn
+	running  atomic.Bool
 }
 
 // metricsScheduler 按 tick 调度并行采集，封装到期判定、并发执行、错误分类
@@ -37,15 +39,15 @@ type metricsScheduler struct {
 func newMetricsScheduler(m *collector.Manager) *metricsScheduler {
 	return &metricsScheduler{
 		collectors: []collectorSpec{
-			{"cpu", true, 1 * time.Second, m.CollectCPU},
-			{"memory", true, 1 * time.Second, m.CollectMemory},
-			{"disk_io", true, 1 * time.Second, m.CollectDiskIO},
-			{"network", true, 1 * time.Second, m.CollectNetwork},
-			{"gpu", false, 1 * time.Second, m.CollectGPU},
-			{"network_connection", true, 1 * time.Second, m.CollectNetworkConnection},
-			{"temperature", false, 5 * time.Second, m.CollectTemperature},
-			{"disk", true, 30 * time.Second, m.CollectDisk},
-			{"host", true, 60 * time.Second, m.CollectHost},
+			{name: "cpu", required: true, interval: time.Second, fn: m.CollectCPU},
+			{name: "memory", required: true, interval: time.Second, fn: m.CollectMemory},
+			{name: "disk_io", required: true, interval: time.Second, fn: m.CollectDiskIO},
+			{name: "network", required: true, interval: time.Second, fn: m.CollectNetwork},
+			{name: "gpu", interval: time.Second, fn: m.CollectGPU},
+			{name: "network_connection", required: true, interval: time.Second, fn: m.CollectNetworkConnection},
+			{name: "temperature", interval: 5 * time.Second, fn: m.CollectTemperature},
+			{name: "disk", required: true, interval: 30 * time.Second, fn: m.CollectDisk},
+			{name: "host", required: true, interval: 60 * time.Second, fn: m.CollectHost},
 		},
 	}
 }
@@ -70,10 +72,12 @@ func (s *metricsScheduler) collect(tickCount uint64) (samples []protocol.MetricS
 		if every == 0 || tickCount%every != 0 {
 			continue
 		}
+		if !c.running.CompareAndSwap(false, true) {
+			continue
+		}
 
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
+			defer c.running.Store(false)
 			defer func() {
 				if r := recover(); r != nil {
 					slog.Error("采集器 panic", "collector", c.name, "panic", r)
@@ -87,7 +91,7 @@ func (s *metricsScheduler) collect(tickCount uint64) (samples []protocol.MetricS
 				slog.Info("采集耗时", "collector", c.name, "duration", d)
 			}
 			results <- collectResult{name: c.name, required: c.required, sample: sample, err: err}
-		}()
+		})
 	}
 
 	wg.Wait()

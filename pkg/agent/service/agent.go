@@ -589,20 +589,24 @@ func (a *Agent) collectLoop(ctx context.Context) {
 
 // collectOnce 在超时保护下采集本 tick 到期的指标并写入快照存储。
 func (a *Agent) collectOnce(scheduler *metricsScheduler, tickCount uint64) {
-	done := make(chan struct{})
+	type collectionResult struct {
+		samples  []protocol.MetricSample
+		hasError bool
+	}
+	done := make(chan collectionResult, 1)
 	go func() {
-		defer close(done)
 		samples, hasError := scheduler.collect(tickCount)
-		if len(samples) > 0 {
-			a.metricsStore.put(samples)
-		}
-		if hasError {
-			slog.Warn("部分指标采集失败")
-		}
+		done <- collectionResult{samples: samples, hasError: hasError}
 	}()
 
 	select {
-	case <-done:
+	case result := <-done:
+		if len(result.samples) > 0 {
+			a.metricsStore.put(result.samples)
+		}
+		if result.hasError {
+			slog.Warn("部分指标采集失败")
+		}
 	case <-time.After(agentCollectTimeout):
 		slog.Warn("数据采集超时", "timeout", agentCollectTimeout)
 	}

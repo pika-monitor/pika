@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"sync"
 	"time"
 
 	"github.com/pika-monitor/pika/internal/protocol"
@@ -9,6 +10,9 @@ import (
 
 // DiskIOCollector 磁盘 IO 监控采集器
 type DiskIOCollector struct {
+	mu           sync.Mutex
+	previous     map[string]disk.IOCountersStat
+	previousTime time.Time
 }
 
 // NewDiskIOCollector 创建磁盘 IO 采集器
@@ -16,28 +20,19 @@ func NewDiskIOCollector() *DiskIOCollector {
 	return &DiskIOCollector{}
 }
 
-// Collect 采集磁盘 IO 数据(间隔1秒采集两次计算速率)
+// Collect 采集磁盘 IO 数据并根据相邻采样的时间差计算速率
 func (d *DiskIOCollector) Collect() ([]protocol.DiskIOData, error) {
-	// 第一次采集
-	firstCounters, err := d.collectOnce()
-	if err != nil {
-		return nil, err
-	}
-
-	// 间隔1秒
-	time.Sleep(1 * time.Second)
-
-	// 第二次采集
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	secondCounters, err := d.collectOnce()
 	if err != nil {
 		return nil, err
 	}
-
-	// 创建第一次采集的统计数据映射
-	firstStatsMap := make(map[string]disk.IOCountersStat)
-	for device, counter := range firstCounters {
-		firstStatsMap[device] = counter
-	}
+	now := time.Now()
+	elapsed := now.Sub(d.previousTime).Seconds()
+	firstStatsMap := d.previous
+	d.previous = secondCounters
+	d.previousTime = now
 
 	// 计算速率(基于两次采集的差值)
 	var diskIODataList []protocol.DiskIOData
@@ -55,12 +50,11 @@ func (d *DiskIOCollector) Collect() ([]protocol.DiskIOData, error) {
 		}
 
 		// 计算速率(如果第一次采集有数据)
-		if firstStat, exists := firstStatsMap[device]; exists {
+		if firstStat, exists := firstStatsMap[device]; exists && elapsed > 0 {
 			readBytesDelta := safeDelta(counter.ReadBytes, firstStat.ReadBytes)
 			writeBytesDelta := safeDelta(counter.WriteBytes, firstStat.WriteBytes)
-			// 间隔固定为1秒
-			diskIOData.ReadBytesRate = readBytesDelta
-			diskIOData.WriteBytesRate = writeBytesDelta
+			diskIOData.ReadBytesRate = counterRate(readBytesDelta, elapsed)
+			diskIOData.WriteBytesRate = counterRate(writeBytesDelta, elapsed)
 		} else {
 			// 如果第一次采集没有该设备数据,速率为0
 			diskIOData.ReadBytesRate = 0
