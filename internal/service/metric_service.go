@@ -197,11 +197,6 @@ func (s *MetricService) PrepareMetricData(ctx context.Context, agentID string, m
 	}
 	defer s.latestCache.Set(agentID, latestMetrics, time.Hour)
 
-	// 推进缓存时间戳：服务端 wall clock，永远向前
-	latestMetrics.Update(func(lm *metric.LatestMetrics) {
-		lm.Timestamp = serverNow
-	})
-
 	// 解析数据并转换为 VictoriaMetrics 指标，由调用方合并写入。
 	switch protocol.MetricType(metricType) {
 	case protocol.MetricTypeCPU:
@@ -209,7 +204,7 @@ func (s *MetricService) PrepareMetricData(ctx context.Context, agentID string, m
 		if err := json.Unmarshal(data, &cpuData); err != nil {
 			return nil, err
 		}
-		latestMetrics.Update(func(lm *metric.LatestMetrics) {
+		latestMetrics.UpdateSample(protocol.MetricType(metricType), timestamp, serverNow, func(lm *metric.LatestMetrics) {
 			lm.CPU = &cpuData
 		})
 		metrics := s.convertToMetrics(agentID, metricType, &cpuData, timestamp)
@@ -220,7 +215,7 @@ func (s *MetricService) PrepareMetricData(ctx context.Context, agentID string, m
 		if err := json.Unmarshal(data, &memData); err != nil {
 			return nil, err
 		}
-		latestMetrics.Update(func(lm *metric.LatestMetrics) {
+		latestMetrics.UpdateSample(protocol.MetricType(metricType), timestamp, serverNow, func(lm *metric.LatestMetrics) {
 			lm.Memory = &memData
 		})
 		metrics := s.convertToMetrics(agentID, metricType, &memData, timestamp)
@@ -247,7 +242,7 @@ func (s *MetricService) PrepareMetricData(ctx context.Context, agentID string, m
 				Used:         totalUsed,
 				Free:         totalFree,
 			}
-			latestMetrics.Update(func(lm *metric.LatestMetrics) {
+			latestMetrics.UpdateSample(protocol.MetricType(metricType), timestamp, serverNow, func(lm *metric.LatestMetrics) {
 				lm.Disk = summary
 			})
 		}
@@ -276,7 +271,7 @@ func (s *MetricService) PrepareMetricData(ctx context.Context, agentID string, m
 				TotalBytesRecvTotal: totalRecvTotal,
 				TotalInterfaces:     len(networkDataList),
 			}
-			latestMetrics.Update(func(lm *metric.LatestMetrics) {
+			latestMetrics.UpdateSample(protocol.MetricType(metricType), timestamp, serverNow, func(lm *metric.LatestMetrics) {
 				lm.Network = summary
 				lm.NetworkInterfaces = networkDataList
 			})
@@ -295,7 +290,7 @@ func (s *MetricService) PrepareMetricData(ctx context.Context, agentID string, m
 		if err := json.Unmarshal(data, &connData); err != nil {
 			return nil, err
 		}
-		latestMetrics.Update(func(lm *metric.LatestMetrics) {
+		latestMetrics.UpdateSample(protocol.MetricType(metricType), timestamp, serverNow, func(lm *metric.LatestMetrics) {
 			lm.NetworkConnection = &connData
 		})
 		metrics := s.convertToMetrics(agentID, metricType, &connData, timestamp)
@@ -321,7 +316,7 @@ func (s *MetricService) PrepareMetricData(ctx context.Context, agentID string, m
 				TotalWriteBytesRate: totalWrite,
 				TotalDevices:        len(diskIODataList),
 			}
-			latestMetrics.Update(func(lm *metric.LatestMetrics) {
+			latestMetrics.UpdateSample(protocol.MetricType(metricType), timestamp, serverNow, func(lm *metric.LatestMetrics) {
 				lm.DiskIO = summary
 			})
 		}
@@ -333,7 +328,7 @@ func (s *MetricService) PrepareMetricData(ctx context.Context, agentID string, m
 		if err := json.Unmarshal(data, &hostData); err != nil {
 			return nil, err
 		}
-		latestMetrics.Update(func(lm *metric.LatestMetrics) {
+		latestMetrics.UpdateSample(protocol.MetricType(metricType), timestamp, serverNow, func(lm *metric.LatestMetrics) {
 			lm.Host = &hostData
 		})
 		return nil, nil
@@ -345,7 +340,7 @@ func (s *MetricService) PrepareMetricData(ctx context.Context, agentID string, m
 		}
 		// 无 GPU 数据时，不更新缓存
 		if len(gpuDataList) > 0 {
-			latestMetrics.Update(func(lm *metric.LatestMetrics) {
+			latestMetrics.UpdateSample(protocol.MetricType(metricType), timestamp, serverNow, func(lm *metric.LatestMetrics) {
 				lm.GPU = gpuDataList
 			})
 		}
@@ -359,7 +354,7 @@ func (s *MetricService) PrepareMetricData(ctx context.Context, agentID string, m
 		}
 		// 无温度数据时，不更新缓存
 		if len(tempDataList) > 0 {
-			latestMetrics.Update(func(lm *metric.LatestMetrics) {
+			latestMetrics.UpdateSample(protocol.MetricType(metricType), timestamp, serverNow, func(lm *metric.LatestMetrics) {
 				lm.Temp = tempDataList
 			})
 		}
@@ -374,7 +369,7 @@ func (s *MetricService) PrepareMetricData(ctx context.Context, agentID string, m
 		for i := range monitorDataList {
 			monitorDataList[i].AgentId = agentID // 关联探针ID
 		}
-		latestMetrics.Update(func(lm *metric.LatestMetrics) {
+		latestMetrics.UpdateSample(protocol.MetricType(metricType), timestamp, serverNow, func(lm *metric.LatestMetrics) {
 			lm.Monitors = monitorDataList
 		})
 		for _, monitorData := range monitorDataList {

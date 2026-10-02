@@ -1,6 +1,7 @@
 package metric
 
 import (
+	"maps"
 	"sync"
 
 	"github.com/pika-monitor/pika/internal/protocol"
@@ -40,8 +41,9 @@ type DiskIOSummary struct {
 type LatestMetrics struct {
 	mu sync.RWMutex `json:"-"`
 
-	// Timestamp 探针采集该批指标的时间戳（毫秒），用于前端实时图表追加点位
+	// Timestamp 最新指标的服务端接收时间（毫秒）。
 	Timestamp         int64                           `json:"timestamp,omitempty"`
+	SampleTimestamps  map[protocol.MetricType]int64   `json:"sampleTimestamps,omitempty"`
 	CPU               *protocol.CPUData               `json:"cpu,omitempty"`
 	Memory            *protocol.MemoryData            `json:"memory,omitempty"`
 	Disk              *DiskSummary                    `json:"disk,omitempty"`
@@ -62,6 +64,19 @@ func (lm *LatestMetrics) Update(fn func(*LatestMetrics)) {
 	fn(lm)
 }
 
+func (lm *LatestMetrics) UpdateSample(metricType protocol.MetricType, timestamp, receivedAt int64, fn func(*LatestMetrics)) {
+	lm.Update(func(current *LatestMetrics) {
+		fn(current)
+		if current.SampleTimestamps == nil {
+			current.SampleTimestamps = make(map[protocol.MetricType]int64)
+		}
+		current.SampleTimestamps[metricType] = timestamp
+		if receivedAt > current.Timestamp {
+			current.Timestamp = receivedAt
+		}
+	})
+}
+
 // Snapshot 在读锁内对当前状态做浅拷贝。返回的对象拥有独立的零值互斥量，
 // 调用方可以安全地读取/序列化/再 sanitize（修改返回对象上的字段不会影响缓存）。
 // 内部的指针/切片仍指向旧值，但因为写者每次都整体替换字段，所以是安全的。
@@ -70,6 +85,7 @@ func (lm *LatestMetrics) Snapshot() *LatestMetrics {
 	defer lm.mu.RUnlock()
 	return &LatestMetrics{
 		Timestamp:         lm.Timestamp,
+		SampleTimestamps:  maps.Clone(lm.SampleTimestamps),
 		CPU:               lm.CPU,
 		Memory:            lm.Memory,
 		Disk:              lm.Disk,
