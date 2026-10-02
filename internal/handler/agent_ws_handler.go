@@ -10,6 +10,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v5"
 	"github.com/pika-monitor/pika/internal/protocol"
+	"github.com/pika-monitor/pika/internal/vmclient"
 	ws "github.com/pika-monitor/pika/internal/websocket"
 	"go.uber.org/zap"
 )
@@ -197,6 +198,7 @@ func (h *AgentHandler) handleMetricsMessage(ctx context.Context, agentID string,
 
 	var transientErr error
 	var permanentErr error
+	var metrics []vmclient.Metric
 	for _, sample := range batch.Samples {
 		metricsData, err := json.Marshal(sample.Data)
 		if err != nil {
@@ -204,7 +206,8 @@ func (h *AgentHandler) handleMetricsMessage(ctx context.Context, agentID string,
 			permanentErr = errors.Join(permanentErr, err)
 			continue
 		}
-		if err := h.metricService.HandleMetricData(ctx, agentID, string(sample.Type), metricsData, sample.Timestamp); err != nil {
+		prepared, err := h.metricService.PrepareMetricData(ctx, agentID, string(sample.Type), metricsData, sample.Timestamp)
+		if err != nil {
 			h.logger.Warn("failed to handle metric sample", zap.Error(err), zap.String("type", string(sample.Type)))
 			if isPayloadError(err) {
 				permanentErr = errors.Join(permanentErr, err)
@@ -213,6 +216,10 @@ func (h *AgentHandler) handleMetricsMessage(ctx context.Context, agentID string,
 			}
 			continue
 		}
+		metrics = append(metrics, prepared...)
+	}
+	if err := h.metricService.WriteMetrics(ctx, metrics); err != nil {
+		transientErr = errors.Join(transientErr, err)
 	}
 	if transientErr != nil {
 		return transientErr

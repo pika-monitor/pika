@@ -32,6 +32,7 @@ type MetricService struct {
 	propertyService *PropertyService
 	trafficService  *TrafficService // 流量统计服务
 	vmClient        *vmclient.VMClient
+	batchWriter     *vmclient.BatchWriter
 
 	latestCache cache.Cache[string, *metric.LatestMetrics] // Agent 最新指标缓存
 
@@ -51,6 +52,7 @@ func NewMetricService(logger *zap.Logger, db *gorm.DB, propertyService *Property
 		propertyService:          propertyService,
 		trafficService:           trafficService,
 		vmClient:                 vmClient,
+		batchWriter:              vmclient.NewBatchWriter(vmClient),
 		latestCache:              cache.New[string, *metric.LatestMetrics](time.Minute),
 		monitorLatestCache:       cache.New[string, *metric.LatestMonitorMetrics](5 * time.Minute), // 监控数据缓存 5 分钟
 		monitorSparklineCache:    make(map[string]monitorSparklineCacheEntry),
@@ -166,6 +168,23 @@ func (s *MetricService) CleanOrphanedAgentMetrics(ctx context.Context) error {
 // LatestMetrics.Timestamp 改用服务端 time.Now()（单调推进），避免 agent NTP 倒拨导致
 // 前端 useLiveBuffer 的去重逻辑永久冻结。
 func (s *MetricService) HandleMetricData(ctx context.Context, agentID string, metricType string, data json.RawMessage, timestamp int64) error {
+	metrics, err := s.PrepareMetricData(ctx, agentID, metricType, data, timestamp)
+	if err != nil {
+		return err
+	}
+	return s.WriteMetrics(ctx, metrics)
+}
+
+// WriteMetrics 等待合并导入完成后返回，避免可靠消息在数据写入前被 ACK。
+func (s *MetricService) WriteMetrics(ctx context.Context, metrics []vmclient.Metric) error {
+	if s.batchWriter != nil {
+		return s.batchWriter.Write(ctx, metrics)
+	}
+	return s.vmClient.Write(ctx, metrics)
+}
+
+// PrepareMetricData 更新实时缓存并转换指标，不单独发起 HTTP 写入。
+func (s *MetricService) PrepareMetricData(ctx context.Context, agentID string, metricType string, data json.RawMessage, timestamp int64) ([]vmclient.Metric, error) {
 	if timestamp == 0 {
 		timestamp = time.Now().UnixMilli()
 	}
@@ -183,34 +202,34 @@ func (s *MetricService) HandleMetricData(ctx context.Context, agentID string, me
 		lm.Timestamp = serverNow
 	})
 
-	// 解析数据并写入 VictoriaMetrics
+	// 解析数据并转换为 VictoriaMetrics 指标，由调用方合并写入。
 	switch protocol.MetricType(metricType) {
 	case protocol.MetricTypeCPU:
 		var cpuData protocol.CPUData
 		if err := json.Unmarshal(data, &cpuData); err != nil {
-			return err
+			return nil, err
 		}
 		latestMetrics.Update(func(lm *metric.LatestMetrics) {
 			lm.CPU = &cpuData
 		})
 		metrics := s.convertToMetrics(agentID, metricType, &cpuData, timestamp)
-		return s.vmClient.Write(ctx, metrics)
+		return metrics, nil
 
 	case protocol.MetricTypeMemory:
 		var memData protocol.MemoryData
 		if err := json.Unmarshal(data, &memData); err != nil {
-			return err
+			return nil, err
 		}
 		latestMetrics.Update(func(lm *metric.LatestMetrics) {
 			lm.Memory = &memData
 		})
 		metrics := s.convertToMetrics(agentID, metricType, &memData, timestamp)
-		return s.vmClient.Write(ctx, metrics)
+		return metrics, nil
 
 	case protocol.MetricTypeDisk:
 		var diskDataList []protocol.DiskData
 		if err := json.Unmarshal(data, &diskDataList); err != nil {
-			return err
+			return nil, err
 		}
 		// 无有效磁盘数据时，不更新缓存（保留上一次有效值）
 		if len(diskDataList) > 0 {
@@ -233,12 +252,12 @@ func (s *MetricService) HandleMetricData(ctx context.Context, agentID string, me
 			})
 		}
 		metrics := s.convertToMetrics(agentID, metricType, diskDataList, timestamp)
-		return s.vmClient.Write(ctx, metrics)
+		return metrics, nil
 
 	case protocol.MetricTypeNetwork:
 		var networkDataList []protocol.NetworkData
 		if err := json.Unmarshal(data, &networkDataList); err != nil {
-			return err
+			return nil, err
 		}
 		// 无有效网络数据时，不更新缓存（保留上一次有效值）
 		if len(networkDataList) > 0 {
@@ -269,23 +288,23 @@ func (s *MetricService) HandleMetricData(ctx context.Context, agentID string, me
 			}
 		}
 		metrics := s.convertToMetrics(agentID, metricType, networkDataList, timestamp)
-		return s.vmClient.Write(ctx, metrics)
+		return metrics, nil
 
 	case protocol.MetricTypeNetworkConnection:
 		var connData protocol.NetworkConnectionData
 		if err := json.Unmarshal(data, &connData); err != nil {
-			return err
+			return nil, err
 		}
 		latestMetrics.Update(func(lm *metric.LatestMetrics) {
 			lm.NetworkConnection = &connData
 		})
 		metrics := s.convertToMetrics(agentID, metricType, &connData, timestamp)
-		return s.vmClient.Write(ctx, metrics)
+		return metrics, nil
 
 	case protocol.MetricTypeDiskIO:
 		var diskIODataList []*protocol.DiskIOData
 		if err := json.Unmarshal(data, &diskIODataList); err != nil {
-			return err
+			return nil, err
 		}
 		// 无有效数据时不更新缓存（保留上一次有效值）
 		if len(diskIODataList) > 0 {
@@ -307,22 +326,22 @@ func (s *MetricService) HandleMetricData(ctx context.Context, agentID string, me
 			})
 		}
 		metrics := s.convertToMetrics(agentID, metricType, diskIODataList, timestamp)
-		return s.vmClient.Write(ctx, metrics)
+		return metrics, nil
 
 	case protocol.MetricTypeHost:
 		var hostData protocol.HostInfoData
 		if err := json.Unmarshal(data, &hostData); err != nil {
-			return err
+			return nil, err
 		}
 		latestMetrics.Update(func(lm *metric.LatestMetrics) {
 			lm.Host = &hostData
 		})
-		return nil
+		return nil, nil
 
 	case protocol.MetricTypeGPU:
 		var gpuDataList []protocol.GPUData
 		if err := json.Unmarshal(data, &gpuDataList); err != nil {
-			return err
+			return nil, err
 		}
 		// 无 GPU 数据时，不更新缓存
 		if len(gpuDataList) > 0 {
@@ -331,12 +350,12 @@ func (s *MetricService) HandleMetricData(ctx context.Context, agentID string, me
 			})
 		}
 		metrics := s.convertToMetrics(agentID, metricType, gpuDataList, timestamp)
-		return s.vmClient.Write(ctx, metrics)
+		return metrics, nil
 
 	case protocol.MetricTypeTemperature:
 		var tempDataList []protocol.TemperatureData
 		if err := json.Unmarshal(data, &tempDataList); err != nil {
-			return err
+			return nil, err
 		}
 		// 无温度数据时，不更新缓存
 		if len(tempDataList) > 0 {
@@ -345,12 +364,12 @@ func (s *MetricService) HandleMetricData(ctx context.Context, agentID string, me
 			})
 		}
 		metrics := s.convertToMetrics(agentID, metricType, tempDataList, timestamp)
-		return s.vmClient.Write(ctx, metrics)
+		return metrics, nil
 
 	case protocol.MetricTypeMonitor:
 		var monitorDataList []protocol.MonitorData
 		if err := json.Unmarshal(data, &monitorDataList); err != nil {
-			return err
+			return nil, err
 		}
 		for i := range monitorDataList {
 			monitorDataList[i].AgentId = agentID // 关联探针ID
@@ -363,11 +382,11 @@ func (s *MetricService) HandleMetricData(ctx context.Context, agentID string, me
 		}
 
 		metrics := s.convertToMetrics(agentID, metricType, monitorDataList, timestamp)
-		return s.vmClient.Write(ctx, metrics)
+		return metrics, nil
 
 	default:
 		s.logger.Warn("unknown cpiMetric type", zap.String("type", metricType))
-		return nil
+		return nil, nil
 	}
 }
 

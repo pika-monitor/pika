@@ -102,19 +102,28 @@ func (c *VMClient) Write(ctx context.Context, metrics []Metric) error {
 		return nil
 	}
 
-	reqCtx, cancel := context.WithTimeout(ctx, c.writeTimeout)
-	defer cancel()
+	payload, err := encodeMetrics(metrics)
+	if err != nil {
+		return err
+	}
+	return c.writePayload(ctx, payload)
+}
 
-	// 将 Metric 数组转换为 JSON Line Format (NDJSON)
+func encodeMetrics(metrics []Metric) ([]byte, error) {
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)
 	for _, metric := range metrics {
 		if err := encoder.Encode(metric); err != nil {
-			return fmt.Errorf("encode metric failed: %w", err)
+			return nil, fmt.Errorf("encode metric failed: %w", err)
 		}
 	}
+	return buf.Bytes(), nil
+}
 
-	req, err := http.NewRequestWithContext(reqCtx, "POST", c.baseURL+"/api/v1/import", &buf)
+func (c *VMClient) writePayload(ctx context.Context, payload []byte) error {
+	reqCtx, cancel := context.WithTimeout(ctx, c.writeTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, "POST", c.baseURL+"/api/v1/import", bytes.NewReader(payload))
 	if err != nil {
 		return fmt.Errorf("create request failed: %w", err)
 	}
