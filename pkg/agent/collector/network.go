@@ -10,12 +10,16 @@ import (
 	gopsutilNet "github.com/shirou/gopsutil/v4/net"
 )
 
+const networkInterfaceRefreshInterval = 30 * time.Second
+
 // NetworkCollector 网络监控采集器
 type NetworkCollector struct {
-	mu           sync.Mutex
-	config       *config.Config // 配置信息
-	previous     map[string]gopsutilNet.IOCountersStat
-	previousTime time.Time
+	mu                  sync.Mutex
+	config              *config.Config // 配置信息
+	previous            map[string]gopsutilNet.IOCountersStat
+	previousTime        time.Time
+	interfaces          gopsutilNet.InterfaceStatList
+	interfacesUpdatedAt time.Time
 }
 
 // safeDelta 计算网络计数器的增量,当出现重置或回绕时返回当前值避免溢出
@@ -135,7 +139,7 @@ func (n *NetworkCollector) Collect() ([]protocol.NetworkData, error) {
 // collectOnce 执行一次网络数据采集
 func (n *NetworkCollector) collectOnce() ([]gopsutilNet.IOCountersStat, []gopsutilNet.InterfaceStat, error) {
 	// 获取网络接口信息
-	interfaces, err := gopsutilNet.Interfaces()
+	interfaces, err := n.collectInterfaces(time.Now(), gopsutilNet.Interfaces)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -147,4 +151,17 @@ func (n *NetworkCollector) collectOnce() ([]gopsutilNet.IOCountersStat, []gopsut
 	}
 
 	return ioCounters, interfaces, nil
+}
+
+func (n *NetworkCollector) collectInterfaces(now time.Time, load func() (gopsutilNet.InterfaceStatList, error)) (gopsutilNet.InterfaceStatList, error) {
+	if !n.interfacesUpdatedAt.IsZero() && now.Sub(n.interfacesUpdatedAt) < networkInterfaceRefreshInterval {
+		return n.interfaces, nil
+	}
+	interfaces, err := load()
+	if err != nil {
+		return nil, err
+	}
+	n.interfaces = interfaces
+	n.interfacesUpdatedAt = now
+	return interfaces, nil
 }
