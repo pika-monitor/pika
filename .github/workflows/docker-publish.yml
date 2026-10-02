@@ -33,15 +33,11 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 读取默认主题锁定版本
-        run: echo "DEFAULT_THEME_REF=$(tr -d '\r\n' < .github/default-theme.ref)" >> "$GITHUB_ENV"
-
       # 默认主题作为独立源码仓库参与 Pika 发布构建
       - name: 检出官方默认主题
         uses: actions/checkout@v4
         with:
           repository: pika-monitor/pika-default-theme
-          ref: ${{ env.DEFAULT_THEME_REF }}
           path: pika-default-theme
 
       # 安装 make 和 upx

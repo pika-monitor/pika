@@ -17,8 +17,8 @@ LDFLAGS=-s -w -X 'github.com/pika-monitor/pika/pkg/version.Version=$(VERSION)' -
 AGENT_LDFLAGS=-s -w -X 'github.com/pika-monitor/pika/pkg/version.Version=$(VERSION)' -X 'github.com/pika-monitor/pika/pkg/version.AgentVersion=$(AGENT_VERSION)'
 GOFLAGS=CGO_ENABLED=0
 
-# 默认主题已拆分到独立仓库。本地默认使用同级目录，CI 会显式传入 checkout 目录。
-DEFAULT_THEME_DIR ?= ../pika-default-theme
+# 默认主题默认拉取远端最新代码，显式指定目录时使用该目录的源码。
+DEFAULT_THEME_DIR ?=
 DEFAULT_THEME_OUTPUT_DIR ?= themes/default
 
 .PHONY: build-web build-default-theme
@@ -30,14 +30,21 @@ build-web:
 	$(MAKE) build-default-theme
 
 build-default-theme:
-	test -f "$(DEFAULT_THEME_DIR)/package-lock.json"
-	test -f "$(DEFAULT_THEME_DIR)/pika-theme.json"
-	npm ci --prefix "$(DEFAULT_THEME_DIR)"
-	npm run build --prefix "$(DEFAULT_THEME_DIR)"
-	rm -rf "$(DEFAULT_THEME_OUTPUT_DIR)"
-	mkdir -p "$(DEFAULT_THEME_OUTPUT_DIR)"
-	cp "$(DEFAULT_THEME_DIR)/pika-theme.json" "$(DEFAULT_THEME_OUTPUT_DIR)/pika-theme.json"
-	cp -R "$(DEFAULT_THEME_DIR)/dist" "$(DEFAULT_THEME_OUTPUT_DIR)/dist"
+	@set -eu; \
+	theme_dir="$(DEFAULT_THEME_DIR)"; \
+	if [ -z "$$theme_dir" ]; then \
+		tmp_dir=$$(mktemp -d); \
+		trap 'rm -rf "$$tmp_dir"' EXIT; \
+		git clone --depth 1 https://github.com/pika-monitor/pika-default-theme.git "$$tmp_dir"; \
+		theme_dir="$$tmp_dir"; \
+	fi; \
+	test -f "$$theme_dir/package-lock.json"; \
+	test -f "$$theme_dir/pika-theme.json"; \
+	(cd "$$theme_dir" && npm ci && npm run build); \
+	rm -rf "$(DEFAULT_THEME_OUTPUT_DIR)"; \
+	mkdir -p "$(DEFAULT_THEME_OUTPUT_DIR)"; \
+	cp "$$theme_dir/pika-theme.json" "$(DEFAULT_THEME_OUTPUT_DIR)/pika-theme.json"; \
+	cp -R "$$theme_dir/dist" "$(DEFAULT_THEME_OUTPUT_DIR)/dist"
 
 # 构建服务端（开发）
 build-server:

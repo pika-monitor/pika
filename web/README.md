@@ -2,7 +2,7 @@
 
 `web/` 是官方管理后台前端（React/Vite），发布到 `/admin/assets/*`。
 
-官方默认公开主题是独立项目 [`pika-monitor/pika-default-theme`](https://github.com/pika-monitor/pika-default-theme)。本地开发时，`Makefile` 默认从同级目录 `../pika-default-theme` 构建它。
+官方默认公开主题是独立项目 [`pika-monitor/pika-default-theme`](https://github.com/pika-monitor/pika-default-theme)。打包时默认拉取该仓库默认分支的最新代码；本地开发可以使用同级目录 `../pika-default-theme`。
 
 ## 开发
 
@@ -23,13 +23,13 @@ cd ../pika-default-theme && npm ci && npm run dev # 默认主题，http://localh
 - 管理后台：`web/dist/`；
 - 默认主题：`themes/default/`。
 
-如果主题源码不在默认位置，可以显式指定：
+本地开发需要使用已有主题源码（包括未提交的修改）时，可以显式指定目录，跳过远端拉取：
 
 ```bash
 make DEFAULT_THEME_DIR=/path/to/pika-default-theme build-web
 ```
 
-GitHub Actions 使用 `.github/default-theme.ref` 中的完整 Git Commit SHA 锁定默认主题，保证同一 Pika 版本的发布构建可复现。
+GitHub Actions 的测试镜像和正式发布每次都会检出默认主题仓库默认分支的最新提交，不再锁定主题版本。同一个 Pika 版本重新打包时，可能包含更新后的默认主题。未指定 `DEFAULT_THEME_DIR` 的本地构建也会拉取最新源码，需要网络连接；拉取或构建失败时打包失败，不回退到旧版本。
 
 ## 运行路径
 
