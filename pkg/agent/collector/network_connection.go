@@ -1,6 +1,8 @@
 package collector
 
 import (
+	"runtime"
+
 	"github.com/pika-monitor/pika/internal/protocol"
 	"github.com/shirou/gopsutil/v4/net"
 )
@@ -17,7 +19,11 @@ func NewNetworkConnectionCollector() *NetworkConnectionCollector {
 // Collect 采集网络连接统计数据
 func (n *NetworkConnectionCollector) Collect() (*protocol.NetworkConnectionData, error) {
 	// 获取所有网络连接
-	connections, err := net.ConnectionsWithoutUids("all")
+	collectConnections := net.ConnectionsWithoutUids
+	if runtime.GOOS == "darwin" || runtime.GOOS == "freebsd" {
+		collectConnections = net.Connections
+	}
+	connections, err := collectConnections("all")
 	if err != nil {
 		return nil, err
 	}

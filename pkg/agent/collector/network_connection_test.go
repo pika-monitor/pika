@@ -1,9 +1,31 @@
 package collector
 
 import (
-	"github.com/pika-monitor/pika/internal/protocol"
+	"net"
+	"runtime"
 	"testing"
+
+	"github.com/pika-monitor/pika/internal/protocol"
 )
+
+func TestNetworkConnectionCollectorCollectOnBSD(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "freebsd" {
+		t.Skip("requires macOS or FreeBSD")
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	data, err := NewNetworkConnectionCollector().Collect()
+	if err != nil {
+		t.Fatalf("collect network connections: %v", err)
+	}
+	if data.Total == 0 || data.Listen == 0 {
+		t.Fatalf("expected TCP listener in connection counts: %+v", data)
+	}
+}
 
 func TestAddConnectionStatus(t *testing.T) {
 	data := &protocol.NetworkConnectionData{}
