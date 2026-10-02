@@ -4,6 +4,25 @@
 
 编辑 `config.yaml` 文件，根据需要修改以下配置：
 
+### 数据库连接池
+
+数据库连接池由 orz 统一管理，配置放在 `database.pool` 中。例如 PostgreSQL：
+
+```yaml
+database:
+  pool:
+    max_open_conns: 30
+    max_idle_conns: 10
+    conn_max_lifetime_seconds: 3600
+    conn_max_idle_time_seconds: 300
+```
+
+`max_open_conns` 是最大连接数，`max_idle_conns` 是保留的空闲连接数，后两项分别是连接最长存活时间和最大空闲时间，单位为秒。空闲连接数不会超过最大连接数。
+
+SQLite 配置示例将 `max_open_conns` 和 `max_idle_conns` 都设为 `1`，以减少并发写入的锁冲突。这些配置由 orz 自动应用，Pika 不额外设置或覆盖连接池。
+
+所有数据库未配置连接池时均使用 orz 默认值：30 个最大连接、10 个空闲连接、3600 秒最长存活时间和 300 秒最大空闲时间。orz v0.4.3 中数值 `0` 表示使用默认值，不能用来设置无限连接、禁用空闲连接或禁用连接过期；负数会导致启动失败。
+
 ### VictoriaMetrics 配置
 
 确保时序数据库连接信息正确：

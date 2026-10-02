@@ -8,6 +8,11 @@ database:
     password: pika
     database: pika
   show_sql: false
+  pool:
+    max_open_conns: 30 # SQLite 建议 1，PostgreSQL 可按负载调整
+    max_idle_conns: 10
+    conn_max_lifetime_seconds: 3600
+    conn_max_idle_time_seconds: 300
 log:
   level: debug # 日志等级  debug,info,waring,error
   filename: ./logs/pika.log
