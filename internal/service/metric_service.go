@@ -828,7 +828,9 @@ func (s *MetricService) convertQueryResultToSeries(result *vmclient.QueryResult,
 			delete(labels, "sensor_label") // 已合并到名称中，从标签中删除
 		} else if gpuIndex, ok := labels["gpu_index"]; ok {
 			finalName = fmt.Sprintf("GPU_%s", gpuIndex)
-			delete(labels, "gpu_index")
+			// Preserve the GPU identity and metric kind: utilization and temperature
+			// share the same display name but must remain distinguishable to clients.
+			labels["metric_type"] = seriesName
 		}
 
 		// 移除 target 标签（避免数据泄露）
