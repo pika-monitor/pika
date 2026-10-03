@@ -15,10 +15,13 @@ type Series struct {
 
 // GetMetricsResponse 统一的查询响应格式
 type GetMetricsResponse struct {
-	AgentID string   `json:"agentId"`
-	Type    string   `json:"type"`
-	Range   string   `json:"range"`
-	Series  []Series `json:"series"`
+	AgentID      string   `json:"agentId"`
+	Type         string   `json:"type"`
+	Range        string   `json:"range"`
+	Series       []Series `json:"series"`
+	Start        int64    `json:"start"`
+	End          int64    `json:"end"`
+	FailedSeries []string `json:"failedSeries,omitempty"`
 }
 
 // QueryDefinition 查询定义（用于构建多个查询）
@@ -26,4 +29,16 @@ type QueryDefinition struct {
 	Name   string            // 系列名称
 	Query  string            // PromQL 查询语句
 	Labels map[string]string // 额外标签
+}
+
+// LiveMetricsResponse uses original collection timestamps and a shared window.
+type LiveMetricsResponse struct {
+	AgentID        string              `json:"agentId"`
+	GeneratedAt    int64               `json:"generatedAt"`
+	Start          int64               `json:"start"`
+	End            int64               `json:"end"`
+	MonitorStart   int64               `json:"monitorStart"`
+	Series         map[string][]Series `json:"series"`
+	LatestSampleAt map[string]int64    `json:"latestSampleAt"`
+	HistoryError   string              `json:"historyError,omitempty"`
 }

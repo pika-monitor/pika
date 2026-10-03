@@ -62,6 +62,9 @@ func (s *MetricService) convertToMetrics(agentID string, metricType string, data
 		// 汇总所有磁盘的 IO
 		var totalReadRate, totalWriteRate uint64
 		for _, diskIOData := range diskIODataList {
+			if diskIOData == nil {
+				continue
+			}
 			totalReadRate += diskIOData.ReadBytesRate
 			totalWriteRate += diskIOData.WriteBytesRate
 		}

@@ -21,11 +21,19 @@ import (
 
 	"github.com/go-orz/cache"
 	"go.uber.org/zap"
+	"golang.org/x/sync/singleflight"
 	"gorm.io/gorm"
 )
 
 // MetricService 指标服务
 type MetricService struct {
+	latestInitMu      sync.Mutex
+	liveMu            sync.Mutex
+	liveAgents        map[string]*liveAgentHistory
+	liveCleanupAt     time.Time
+	liveHistoryGroup  singleflight.Group
+	liveCachedSamples int
+
 	logger          *zap.Logger
 	agentRepo       *repo.AgentRepo
 	monitorRepo     *repo.MonitorRepo
@@ -70,7 +78,7 @@ func (s *MetricService) CleanAgentMetrics(ctx context.Context, agentID string) e
 
 	// 在 VictoriaMetrics 中删除与该 agent 相关的所有时间序列数据
 	matchers := []string{
-		fmt.Sprintf(`{agent_id="%s"}`, agentID), // 删除具有该 agent_id 标签的所有时间序列
+		fmt.Sprintf(`{agent_id=%q}`, agentID), // 删除具有该 agent_id 标签的所有时间序列
 	}
 
 	if err := s.vmClient.DeleteSeries(ctx, matchers); err != nil {
@@ -81,6 +89,7 @@ func (s *MetricService) CleanAgentMetrics(ctx context.Context, agentID string) e
 	}
 
 	s.logger.Info("成功清理探针指标数据", zap.String("agentID", agentID))
+	s.clearLiveMetrics(agentID)
 	return nil
 }
 
@@ -140,7 +149,7 @@ func (s *MetricService) CleanOrphanedAgentMetrics(ctx context.Context) error {
 
 		// 2. 清理 VictoriaMetrics 数据
 		matchers := []string{
-			fmt.Sprintf(`{agent_id="%s"}`, agentID),
+			fmt.Sprintf(`{agent_id=%q}`, agentID),
 		}
 
 		if err := s.vmClient.DeleteSeries(ctx, matchers); err != nil {
@@ -184,17 +193,25 @@ func (s *MetricService) WriteMetrics(ctx context.Context, metrics []vmclient.Met
 }
 
 // PrepareMetricData 更新实时缓存并转换指标，不单独发起 HTTP 写入。
-func (s *MetricService) PrepareMetricData(ctx context.Context, agentID string, metricType string, data json.RawMessage, timestamp int64) ([]vmclient.Metric, error) {
+func (s *MetricService) PrepareMetricData(ctx context.Context, agentID string, metricType string, data json.RawMessage, timestamp int64) (result []vmclient.Metric, resultErr error) {
+	defer func() {
+		if resultErr == nil && len(result) > 0 {
+			s.recordLiveMetrics(agentID, result)
+		}
+	}()
 	if timestamp == 0 {
 		timestamp = time.Now().UnixMilli()
 	}
 	serverNow := time.Now().UnixMilli()
 
 	// 取/建缓存项；defer 里再 Set 一次以刷新 TTL（即便本次没有任何字段变化也能延期）
+	s.latestInitMu.Lock()
 	latestMetrics, ok := s.latestCache.Get(agentID)
 	if !ok {
 		latestMetrics = &metric.LatestMetrics{}
+		s.latestCache.Set(agentID, latestMetrics, time.Hour)
 	}
+	s.latestInitMu.Unlock()
 	defer s.latestCache.Set(agentID, latestMetrics, time.Hour)
 
 	// 解析数据并转换为 VictoriaMetrics 指标，由调用方合并写入。
@@ -304,21 +321,29 @@ func (s *MetricService) PrepareMetricData(ctx context.Context, agentID string, m
 		// 无有效数据时不更新缓存（保留上一次有效值）
 		if len(diskIODataList) > 0 {
 			var totalRead, totalWrite uint64
+			devices := 0
 			for _, ioData := range diskIODataList {
 				if ioData == nil {
 					continue
 				}
+				devices++
 				totalRead += ioData.ReadBytesRate
 				totalWrite += ioData.WriteBytesRate
 			}
 			summary := &metric.DiskIOSummary{
 				TotalReadBytesRate:  totalRead,
 				TotalWriteBytesRate: totalWrite,
-				TotalDevices:        len(diskIODataList),
+				TotalDevices:        devices,
+			}
+			if devices == 0 {
+				return nil, nil
 			}
 			latestMetrics.UpdateSample(protocol.MetricType(metricType), timestamp, serverNow, func(lm *metric.LatestMetrics) {
 				lm.DiskIO = summary
 			})
+		}
+		if len(diskIODataList) == 0 {
+			return nil, nil
 		}
 		metrics := s.convertToMetrics(agentID, metricType, diskIODataList, timestamp)
 		return metrics, nil
@@ -396,29 +421,49 @@ func (s *MetricService) GetMetrics(ctx context.Context, agentID, metricType stri
 		return nil, fmt.Errorf("unsupported metric type: %s", metricType)
 	}
 
-	// 执行查询并转换结果
-	// step 设为 0，让 VictoriaMetrics 自动选择合适的步长
+	// Each request has one deadline and at most four database queries in flight.
+	queryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	results := make([][]metric.Series, len(queries))
+	failures := make([]error, len(queries))
+	jobs := make(chan int, len(queries))
+	for i := range queries {
+		jobs <- i
+	}
+	close(jobs)
+	var wg sync.WaitGroup
+	for range min(4, len(queries)) {
+		wg.Go(func() {
+			for i := range jobs {
+				q := queries[i]
+				result, err := s.vmClient.QueryRange(queryCtx, q.Query, time.UnixMilli(start), time.UnixMilli(end), step)
+				if err != nil {
+					failures[i] = err
+					continue
+				}
+				results[i] = s.convertQueryResultToSeries(result, q.Name, q.Labels)
+			}
+		})
+	}
+	wg.Wait()
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	var series []metric.Series
-
-	for _, q := range queries {
-		result, err := s.vmClient.QueryRange(ctx, q.Query,
-			time.UnixMilli(start),
-			time.UnixMilli(end),
-			step)
-		if err != nil {
-			s.logger.Error("查询 VictoriaMetrics 失败",
-				zap.String("query", q.Query),
-				zap.Error(err))
-			continue // 跳过失败的查询，继续处理其他查询
+	var failedSeries []string
+	for i, result := range results {
+		if failures[i] != nil {
+			failedSeries = append(failedSeries, queries[i].Name)
+		} else {
+			series = append(series, result...)
 		}
-
-		// 转换查询结果为 MetricSeries
-		convertedSeries := s.convertQueryResultToSeries(result, q.Name, q.Labels)
-		series = append(series, convertedSeries...)
+	}
+	if len(failedSeries) == len(queries) {
+		return nil, fmt.Errorf("all metric queries failed: %w", failures[0])
 	}
 
 	// 如果是监控类型，添加监控任务名称到标签中
-	if metricType == "monitor" && len(series) > 0 {
+	if metricType == "monitor" && len(series) > 0 && s.monitorRepo != nil {
 		// 收集所有 monitor_id
 		monitorIdSet := make(map[string]struct{})
 		for _, s := range series {
@@ -434,14 +479,17 @@ func (s *MetricService) GetMetrics(ctx context.Context, agentID, metricType stri
 				monitorIds = append(monitorIds, monitorId)
 			}
 
-			monitors, err := s.monitorRepo.FindByIdIn(ctx, monitorIds)
+			monitors, err := s.monitorRepo.FindByIdIn(queryCtx, monitorIds)
 			if err != nil {
 				s.logger.Error("查询 monitor 信息失败", zap.Error(err))
+				failedSeries = append(failedSeries, "monitor_metadata")
 			} else {
 				// 构建 monitorId -> monitorName 映射
 				monitorNameMap := make(map[string]string)
+				monitorIntervalMap := make(map[string]int)
 				for _, monitor := range monitors {
 					monitorNameMap[monitor.ID] = monitor.Name
+					monitorIntervalMap[monitor.ID] = monitor.Interval * 1000
 				}
 
 				// 在每个 series 的 labels 中添加 monitor_name
@@ -449,6 +497,7 @@ func (s *MetricService) GetMetrics(ctx context.Context, agentID, metricType stri
 					if monitorId, ok := series[i].Labels["monitor_id"]; ok {
 						if monitorName, exists := monitorNameMap[monitorId]; exists {
 							series[i].Labels["monitor_name"] = monitorName
+							series[i].Labels["interval_ms"] = strconv.Itoa(monitorIntervalMap[monitorId])
 						}
 					}
 				}
@@ -461,6 +510,7 @@ func (s *MetricService) GetMetrics(ctx context.Context, agentID, metricType stri
 		Type:    metricType,
 		Range:   fmt.Sprintf("%d-%d", start, end),
 		Series:  series,
+		Start:   start, End: end, FailedSeries: failedSeries,
 	}, nil
 }
 
@@ -527,6 +577,8 @@ func (s *MetricService) CleanAgentFromMonitorCache(agentID string) {
 // DeleteAgentLatestMetricsCache 删除探针在内存中的最新指标缓存
 func (s *MetricService) DeleteAgentLatestMetricsCache(agentID string) {
 	s.latestCache.Delete(agentID)
+	s.clearLiveMetrics(agentID)
+
 	s.logger.Debug("已删除探针最新指标缓存", zap.String("agentID", agentID))
 }
 
@@ -570,6 +622,7 @@ func (s *MetricService) DeleteAgentMetrics(ctx context.Context, agentID string) 
 
 	// 删除内存中的最新指标缓存
 	s.latestCache.Delete(agentID)
+	s.clearLiveMetrics(agentID)
 
 	// 删除 VictoriaMetrics 中该探针的所有 pika 指标
 	matcher := fmt.Sprintf(`{__name__=~"pika_.*",agent_id=%q}`, agentID)
@@ -609,7 +662,7 @@ func (s *MetricService) DeleteMonitorMetrics(ctx context.Context, monitorID stri
 // GetAvailableNetworkInterfaces 获取探针的可用网卡列表（从 VictoriaMetrics 查询）
 func (s *MetricService) GetAvailableNetworkInterfaces(ctx context.Context, agentID string) ([]string, error) {
 	// 查询 interface label 的所有值，排除空字符串（汇总数据）
-	match := []string{fmt.Sprintf(`pika_network_sent_bytes_rate{agent_id="%s"}`, agentID)}
+	match := []string{fmt.Sprintf(`pika_network_sent_bytes_rate{agent_id=%q}`, agentID)}
 	allInterfaces, err := s.vmClient.GetLabelValues(ctx, "interface", match)
 	if err != nil {
 		s.logger.Error("查询网卡列表失败",
@@ -637,19 +690,19 @@ func (s *MetricService) buildPromQLQueries(agentID, metricType string, interface
 	case "cpu":
 		queries = []metric.QueryDefinition{{
 			Name:  "usage",
-			Query: fmt.Sprintf(`pika_cpu_usage_percent{agent_id="%s"}`, agentID),
+			Query: fmt.Sprintf(`pika_cpu_usage_percent{agent_id=%q}`, agentID),
 		}}
 
 	case "memory":
 		queries = []metric.QueryDefinition{{
 			Name:  "usage",
-			Query: fmt.Sprintf(`pika_memory_usage_percent{agent_id="%s"}`, agentID),
+			Query: fmt.Sprintf(`pika_memory_usage_percent{agent_id=%q}`, agentID),
 		}}
 
 	case "disk":
 		queries = []metric.QueryDefinition{{
 			Name:  "usage",
-			Query: fmt.Sprintf(`pika_disk_usage_percent{agent_id="%s",mount_point=""}`, agentID),
+			Query: fmt.Sprintf(`pika_disk_usage_percent{agent_id=%q,mount_point=""}`, agentID),
 		}}
 
 	case "network":
@@ -659,12 +712,12 @@ func (s *MetricService) buildPromQLQueries(agentID, metricType string, interface
 			queries = []metric.QueryDefinition{
 				{
 					Name:   "upload",
-					Query:  fmt.Sprintf(`pika_network_sent_bytes_rate{agent_id="%s",interface="%s"}`, agentID, interfaceName),
+					Query:  fmt.Sprintf(`pika_network_sent_bytes_rate{agent_id=%q,interface=%q}`, agentID, interfaceName),
 					Labels: map[string]string{"interface": interfaceName},
 				},
 				{
 					Name:   "download",
-					Query:  fmt.Sprintf(`pika_network_recv_bytes_rate{agent_id="%s",interface="%s"}`, agentID, interfaceName),
+					Query:  fmt.Sprintf(`pika_network_recv_bytes_rate{agent_id=%q,interface=%q}`, agentID, interfaceName),
 					Labels: map[string]string{"interface": interfaceName},
 				},
 			}
@@ -673,11 +726,11 @@ func (s *MetricService) buildPromQLQueries(agentID, metricType string, interface
 			queries = []metric.QueryDefinition{
 				{
 					Name:  "upload",
-					Query: fmt.Sprintf(`sum(pika_network_sent_bytes_rate{agent_id="%s"}) by (agent_id)`, agentID),
+					Query: fmt.Sprintf(`sum(pika_network_sent_bytes_rate{agent_id=%q}) by (agent_id)`, agentID),
 				},
 				{
 					Name:  "download",
-					Query: fmt.Sprintf(`sum(pika_network_recv_bytes_rate{agent_id="%s"}) by (agent_id)`, agentID),
+					Query: fmt.Sprintf(`sum(pika_network_recv_bytes_rate{agent_id=%q}) by (agent_id)`, agentID),
 				},
 			}
 		}
@@ -685,17 +738,17 @@ func (s *MetricService) buildPromQLQueries(agentID, metricType string, interface
 	case "network_connection":
 		// 网络连接统计：多个状态
 		queries = []metric.QueryDefinition{
-			{Name: "established", Query: fmt.Sprintf(`pika_network_conn_established{agent_id="%s"}`, agentID)},
-			{Name: "time_wait", Query: fmt.Sprintf(`pika_network_conn_time_wait{agent_id="%s"}`, agentID)},
-			{Name: "close_wait", Query: fmt.Sprintf(`pika_network_conn_close_wait{agent_id="%s"}`, agentID)},
-			{Name: "listen", Query: fmt.Sprintf(`pika_network_conn_listen{agent_id="%s"}`, agentID)},
+			{Name: "established", Query: fmt.Sprintf(`pika_network_conn_established{agent_id=%q}`, agentID)},
+			{Name: "time_wait", Query: fmt.Sprintf(`pika_network_conn_time_wait{agent_id=%q}`, agentID)},
+			{Name: "close_wait", Query: fmt.Sprintf(`pika_network_conn_close_wait{agent_id=%q}`, agentID)},
+			{Name: "listen", Query: fmt.Sprintf(`pika_network_conn_listen{agent_id=%q}`, agentID)},
 		}
 
 	case "disk_io":
 		// 磁盘 IO：读和写
 		queries = []metric.QueryDefinition{
-			{Name: "read", Query: fmt.Sprintf(`pika_disk_read_bytes_rate{agent_id="%s"}`, agentID)},
-			{Name: "write", Query: fmt.Sprintf(`pika_disk_write_bytes_rate{agent_id="%s"}`, agentID)},
+			{Name: "read", Query: fmt.Sprintf(`pika_disk_read_bytes_rate{agent_id=%q}`, agentID)},
+			{Name: "write", Query: fmt.Sprintf(`pika_disk_write_bytes_rate{agent_id=%q}`, agentID)},
 		}
 
 	case "gpu":
@@ -703,11 +756,11 @@ func (s *MetricService) buildPromQLQueries(agentID, metricType string, interface
 		queries = []metric.QueryDefinition{
 			{
 				Name:  "utilization",
-				Query: fmt.Sprintf(`pika_gpu_utilization_percent{agent_id="%s"}`, agentID),
+				Query: fmt.Sprintf(`pika_gpu_utilization_percent{agent_id=%q}`, agentID),
 			},
 			{
 				Name:  "temperature",
-				Query: fmt.Sprintf(`pika_gpu_temperature_celsius{agent_id="%s"}`, agentID),
+				Query: fmt.Sprintf(`pika_gpu_temperature_celsius{agent_id=%q}`, agentID),
 			},
 		}
 
@@ -715,14 +768,14 @@ func (s *MetricService) buildPromQLQueries(agentID, metricType string, interface
 		// 温度：按传感器类型分组
 		queries = []metric.QueryDefinition{{
 			Name:  "temperature",
-			Query: fmt.Sprintf(`pika_temperature_celsius{agent_id="%s"}`, agentID),
+			Query: fmt.Sprintf(`pika_temperature_celsius{agent_id=%q}`, agentID),
 		}}
 
 	case "monitor":
 		// 监控：响应时间（该探针参与的所有监控任务）
 		queries = []metric.QueryDefinition{{
 			Name:  "response_time",
-			Query: fmt.Sprintf(`pika_monitor_response_time_ms{agent_id="%s"}`, agentID),
+			Query: fmt.Sprintf(`pika_monitor_response_time_ms{agent_id=%q}`, agentID),
 		}}
 	}
 
@@ -796,7 +849,10 @@ func (s *MetricService) convertQueryResultToSeries(result *vmclient.QueryResult,
 				continue
 			}
 
-			value, _ := strconv.ParseFloat(valueStr, 64)
+			value, err := strconv.ParseFloat(valueStr, 64)
+			if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || math.IsNaN(timestamp) || math.IsInf(timestamp, 0) {
+				continue
+			}
 			dataPoints = append(dataPoints, metric.DataPoint{
 				Timestamp: int64(timestamp * 1000), // 转换为毫秒
 				Value:     value,

@@ -20,6 +20,7 @@ type VMClient struct {
 	httpClient   *http.Client
 	writeTimeout time.Duration
 	queryTimeout time.Duration
+	querySlots   chan struct{}
 }
 
 // QueryResult 查询结果
@@ -86,6 +87,7 @@ func NewVMClient(baseURL string, writeTimeout, queryTimeout time.Duration) *VMCl
 		},
 		writeTimeout: writeTimeout,
 		queryTimeout: queryTimeout,
+		querySlots:   make(chan struct{}, 16),
 	}
 }
 
@@ -153,7 +155,7 @@ func AutoStep(start, end time.Time) time.Duration {
 
 	switch {
 	case r <= 5*time.Minute:
-		// 实时/极短窗口：与探针 1s 采集对齐，避免聚合丢点
+		// 历史短窗口使用 1s 求值步长；实时接口通过 Export 保留采集时间戳。
 		return 1 * time.Second
 	case r <= time.Hour:
 		return 10 * time.Second
@@ -176,11 +178,26 @@ func AutoStep(start, end time.Time) time.Duration {
 	}
 }
 
+// acquireQuery bounds database reads independently of writes and connection pooling.
+func (c *VMClient) acquireQuery(ctx context.Context) (func(), error) {
+	select {
+	case c.querySlots <- struct{}{}:
+		return func() { <-c.querySlots }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 // QueryRange 范围查询
 // 如果 step 为 0，则让 VictoriaMetrics 自动选择合适的步长
 func (c *VMClient) QueryRange(ctx context.Context, query string, start, end time.Time, step time.Duration) (*QueryResult, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, c.queryTimeout)
 	defer cancel()
+	release, err := c.acquireQuery(reqCtx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	params := url.Values{}
 	params.Set("query", query)
@@ -227,6 +244,11 @@ func (c *VMClient) QueryRange(ctx context.Context, query string, start, end time
 func (c *VMClient) Query(ctx context.Context, query string) (*QueryResult, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, c.queryTimeout)
 	defer cancel()
+	release, err := c.acquireQuery(reqCtx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	params := url.Values{}
 	params.Set("query", query)

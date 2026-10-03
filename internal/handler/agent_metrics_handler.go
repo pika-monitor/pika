@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-orz/orz"
 	"github.com/labstack/echo/v5"
+	"github.com/pika-monitor/pika/internal/metric"
 	"github.com/pika-monitor/pika/internal/utils"
 )
 
@@ -124,7 +125,7 @@ func (h *AgentHandler) GetMetrics(c *echo.Context) error {
 	// GetMetrics 内部会自动计算最优聚合间隔
 	metrics, err := h.metricService.GetMetrics(ctx, agentID, metricType, start, end, interfaceName, aggregation)
 	if err != nil {
-		return err
+		return orz.NewError(503, "历史指标暂时不可用")
 	}
 
 	// 直接返回 GetMetricsResponse，避免额外嵌套
@@ -175,4 +176,32 @@ func (h *AgentHandler) GetAvailableNetworkInterfaces(c *echo.Context) error {
 	return orz.Ok(c, orz.Map{
 		"interfaces": interfaces,
 	})
+}
+
+// GetLiveMetrics authorizes once for a batch of all trend metrics.
+func (h *AgentHandler) GetLiveMetrics(c *echo.Context) error {
+	ctx := c.Request().Context()
+	authenticated := utils.IsAuthenticated(c)
+	agent, err := h.agentService.GetAgentByAuth(ctx, c.Param("id"), authenticated)
+	if err != nil {
+		return err
+	}
+	response, err := h.metricService.GetLiveMetrics(ctx, agent.ID)
+	if err != nil {
+		return orz.NewError(503, "实时指标暂时不可用")
+	}
+	if !authenticated {
+		sanitizePublicLiveMetrics(response)
+	}
+	return orz.Ok(c, response)
+}
+
+func sanitizePublicLiveMetrics(response *metric.LiveMetricsResponse) {
+	network := response.Series["network"][:0]
+	for _, series := range response.Series["network"] {
+		if series.Labels["interface"] == "" {
+			network = append(network, series)
+		}
+	}
+	response.Series["network"] = network
 }

@@ -157,6 +157,7 @@ func setupApi(app *orz.App, components *AppComponents) error {
 		publicApiWithOptionalAuth.GET("/agents/tags", components.AgentHandler.GetTags)
 		publicApiWithOptionalAuth.GET("/agents/:id", components.AgentHandler.Get)
 		publicApiWithOptionalAuth.GET("/agents/:id/metrics", components.AgentHandler.GetMetrics)
+		publicApiWithOptionalAuth.GET("/agents/:id/metrics/live", components.AgentHandler.GetLiveMetrics)
 		publicApiWithOptionalAuth.GET("/agents/:id/metrics/latest", components.AgentHandler.GetLatestMetrics)
 		publicApiWithOptionalAuth.GET("/agents/:id/network-interfaces", components.AgentHandler.GetAvailableNetworkInterfaces)
 
