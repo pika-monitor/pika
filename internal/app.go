@@ -329,10 +329,11 @@ func ErrorHandler(logger *zap.Logger) func(next echo.HandlerFunc) echo.HandlerFu
 	var a = func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
 			if err := next(c); err != nil {
-				var he *echo.HTTPError
-				if errors.As(err, &he) {
-					return c.JSON(he.Code, orz.Map{
-						"code":    he.Code,
+				// Echo v5 的内置 HTTP 错误通过 HTTPStatusCoder 提供状态码，
+				// 不一定是 *echo.HTTPError（例如 echo.ErrNotFound）。
+				if code := echo.StatusCode(err); code != 0 {
+					return c.JSON(code, orz.Map{
+						"code":    code,
 						"message": err.Error(),
 					})
 				}
