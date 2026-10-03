@@ -326,37 +326,44 @@ func initDefaultProperties(ctx context.Context, components *AppComponents, logge
 }
 
 func ErrorHandler(logger *zap.Logger) func(next echo.HandlerFunc) echo.HandlerFunc {
-	var a = func(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
 			if err := next(c); err != nil {
+				status := http.StatusInternalServerError
+				code := status
+				message := "Internal Server Error"
+
 				// Echo v5 的内置 HTTP 错误通过 HTTPStatusCoder 提供状态码，
 				// 不一定是 *echo.HTTPError（例如 echo.ErrNotFound）。
-				if code := echo.StatusCode(err); code != 0 {
-					return c.JSON(code, orz.Map{
-						"code":    code,
-						"message": err.Error(),
-					})
-				}
-
 				var oe *orz.Error
-				if errors.As(err, &oe) {
-					return c.JSON(400, orz.Map{
-						"code":    oe.Code,
-						"message": err.Error(),
-					})
+				if httpCode := echo.StatusCode(err); httpCode != 0 {
+					status, code, message = httpCode, httpCode, err.Error()
+				} else if errors.As(err, &oe) {
+					status, code, message = http.StatusBadRequest, int(oe.Code), err.Error()
+					// 保留自定义业务错误码；HTTP 错误码同时决定响应状态。
+					if code >= http.StatusBadRequest && code <= 599 {
+						status = code
+					}
 				}
 
-				logger.Sugar().Errorf("[ERROR] %s", err.Error())
+				if status >= http.StatusInternalServerError {
+					logger.Error("请求处理失败",
+						zap.Error(err),
+						zap.String("method", c.Request().Method),
+						zap.String("path", c.Request().URL.Path),
+						zap.Int("status", status),
+					)
+					message = "Internal Server Error"
+				}
 
-				return c.JSON(500, orz.Map{
-					"code":    500,
-					"message": "Internal Server Error",
+				return c.JSON(status, orz.Map{
+					"code":    code,
+					"message": message,
 				})
 			}
 			return nil
 		}
 	}
-	return a
 }
 
 // startMetricsMonitoring 启动指标监控任务（用于告警检测）

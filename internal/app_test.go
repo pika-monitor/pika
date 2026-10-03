@@ -30,6 +30,13 @@ func TestErrorHandler(t *testing.T) {
 		{name: "unauthorized", err: echo.ErrUnauthorized, status: 401, code: 401, message: "Unauthorized"},
 		{name: "custom HTTP error", err: echo.NewHTTPError(404, "missing asset"), status: 404, code: 404, message: "code=404, message=missing asset"},
 		{name: "business error", err: orz.NewError(1001, "invalid input"), status: 400, code: 1001, message: "invalid input"},
+		{name: "business unauthorized", err: orz.NewError(401, "login required"), status: 401, code: 401, message: "login required"},
+		{name: "business not found", err: orz.NewError(404, "missing resource"), status: 404, code: 404, message: "missing resource"},
+		{name: "business server error", err: orz.NewError(500, "database unavailable"), status: 500, code: 500, message: "Internal Server Error", errorLogs: 1},
+		{name: "wrapped business error", err: fmt.Errorf("input: %w", orz.NewError(1001, "invalid input")), status: 400, code: 1001, message: "input: invalid input"},
+		{name: "HTTP server error", err: echo.NewHTTPError(500, "database unavailable"), status: 500, code: 500, message: "Internal Server Error", errorLogs: 1},
+		{name: "wrapped HTTP server error", err: fmt.Errorf("query: %w", echo.NewHTTPError(503, "backend unavailable")), status: 503, code: 503, message: "Internal Server Error", errorLogs: 1},
+		{name: "formatted error", err: fmt.Errorf("query failed: %s", "database unavailable"), status: 500, code: 500, message: "Internal Server Error", errorLogs: 1},
 		{name: "unexpected error", err: errors.New("database unavailable"), status: 500, code: 500, message: "Internal Server Error", errorLogs: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -56,6 +63,12 @@ func TestErrorHandler(t *testing.T) {
 			}
 			if logs.Len() != test.errorLogs {
 				t.Errorf("error logs = %d, want %d", logs.Len(), test.errorLogs)
+			}
+			if test.errorLogs > 0 && logs.Len() == test.errorLogs {
+				fields := logs.All()[0].ContextMap()
+				if fields["error"] != test.err.Error() || fields["method"] != http.MethodGet || fields["path"] != "/test" || fields["status"] != int64(test.status) {
+					t.Errorf("unexpected error log context: %+v", fields)
+				}
 			}
 		})
 	}
